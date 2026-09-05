@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #0f172a;
+  color: #e2e8f0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DARK MAP TILES — CSS filter to make free OSM tiles look dark/tactical
+   This eliminates the need for CARTO API keys entirely.
+   ═══════════════════════════════════════════════════════════════════ */
+.dark-map .leaflet-tile-pane {
+  filter: brightness(0.55) invert(1) contrast(2.8) hue-rotate(200deg) saturate(0.3) brightness(0.8);
+}
+
+/* Keep markers, popups, controls, overlays unaffected by the tile filter */
+.dark-map .leaflet-marker-pane,
+.dark-map .leaflet-shadow-pane,
+.dark-map .leaflet-overlay-pane,
+.dark-map .leaflet-popup-pane,
+.dark-map .leaflet-tooltip-pane,
+.dark-map .leaflet-control-container {
+  filter: none !important;
+}
+
+/* Leaflet attribution bar: make it blend with dark theme */
+.leaflet-control-attribution {
+  background: rgba(15, 23, 42, 0.8) !important;
+  color: #64748b !important;
+  font-size: 9px !important;
+}
+.leaflet-control-attribution a {
+  color: #38bdf8 !important;
+}
