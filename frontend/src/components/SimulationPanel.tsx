@@ -8,60 +8,57 @@ interface SimulationPanelProps {
 }
 
 const INDIAN_LOCATIONS = [
-  // ── Uttarakhand ──
-  { id: "UK-001", name: "Devprayag (Alaknanda Basin)", group: "Uttarakhand" },
-  { id: "UK-002", name: "Joshimath / Chamoli Sector", group: "Uttarakhand" },
-  { id: "UK-003", name: "Kedarnath Valley (Mandakini)", group: "Uttarakhand" },
-  { id: "UK-004", name: "Rudraprayag Sangam", group: "Uttarakhand" },
-  { id: "UK-005", name: "Pithoragarh (Kali River)", group: "Uttarakhand" },
-  { id: "UK-006", name: "Uttarkashi (Bhagirathi)", group: "Uttarakhand" },
-  // ── Himachal Pradesh ──
-  { id: "HP-001", name: "Manali (Upper Beas River)", group: "Himachal Pradesh" },
-  { id: "HP-002", name: "Kullu - Aut Valley", group: "Himachal Pradesh" },
-  { id: "HP-003", name: "Dharamshala (Kangra Hills)", group: "Himachal Pradesh" },
-  { id: "HP-004", name: "Shimla Ridge & Tutu", group: "Himachal Pradesh" },
-  { id: "HP-005", name: "Kinnaur (Sutlej Gorge)", group: "Himachal Pradesh" },
-  { id: "HP-006", name: "Mandi (Beas-Sutlej Link)", group: "Himachal Pradesh" },
-  // ── Jammu & Kashmir ──
-  { id: "JK-001", name: "Srinagar (Jhelum Floodplain)", group: "J&K" },
-  { id: "JK-002", name: "Anantnag (Lidder Valley)", group: "J&K" },
-  { id: "JK-003", name: "Rajouri (Pir Panjal)", group: "J&K" },
-  // ── Northeast India ──
-  { id: "NE-001", name: "Cherrapunji / Sohra, Meghalaya", group: "Northeast" },
-  { id: "NE-002", name: "Gangtok (Teesta Basin), Sikkim", group: "Northeast" },
-  { id: "NE-003", name: "Haflong (Dima Hasao), Assam", group: "Northeast" },
-  { id: "NE-004", name: "Itanagar, Arunachal Pradesh", group: "Northeast" },
-  { id: "NE-005", name: "Imphal Valley, Manipur", group: "Northeast" },
-  { id: "NE-006", name: "Aizawl (Tlawng Basin), Mizoram", group: "Northeast" },
-  { id: "NE-007", name: "Kohima, Nagaland", group: "Northeast" },
-  { id: "NE-008", name: "Mawsynram Plateau, Meghalaya", group: "Northeast" },
-  // ── Western Ghats & Southern Hills ──
-  { id: "WG-001", name: "Wayanad (Chooralmala), Kerala", group: "Western Ghats" },
-  { id: "WG-002", name: "Munnar (Muthirapuzha), Kerala", group: "Western Ghats" },
-  { id: "WG-003", name: "Mahabaleshwar & Chiplun, Maharashtra", group: "Western Ghats" },
-  { id: "WG-004", name: "Coorg / Madikeri, Karnataka", group: "Western Ghats" },
-  { id: "WG-005", name: "Nilgiris (Coonoor-Ooty), Tamil Nadu", group: "Western Ghats" },
-  { id: "WG-006", name: "Idukki (Periyar Dam Zone), Kerala", group: "Western Ghats" },
-  { id: "WG-007", name: "Amboli Ghat, Maharashtra", group: "Western Ghats" },
-  { id: "WG-008", name: "Goa Hinterland (Sanguem Ghats)", group: "Western Ghats" },
+  { id: 'UK-001', name: 'Devprayag (Alaknanda Basin)', group: 'Uttarakhand' },
+  { id: 'UK-002', name: 'Joshimath / Chamoli Sector', group: 'Uttarakhand' },
+  { id: 'UK-003', name: 'Kedarnath Valley (Mandakini)', group: 'Uttarakhand' },
+  { id: 'UK-004', name: 'Rudraprayag Sangam', group: 'Uttarakhand' },
+  { id: 'UK-005', name: 'Pithoragarh (Kali River)', group: 'Uttarakhand' },
+  { id: 'UK-006', name: 'Uttarkashi (Bhagirathi)', group: 'Uttarakhand' },
+  { id: 'HP-001', name: 'Manali (Upper Beas River)', group: 'Himachal Pradesh' },
+  { id: 'HP-002', name: 'Kullu - Aut Valley', group: 'Himachal Pradesh' },
+  { id: 'HP-003', name: 'Dharamshala (Kangra Hills)', group: 'Himachal Pradesh' },
+  { id: 'HP-004', name: 'Shimla Ridge & Tutu', group: 'Himachal Pradesh' },
+  { id: 'HP-005', name: 'Kinnaur (Sutlej Gorge)', group: 'Himachal Pradesh' },
+  { id: 'HP-006', name: 'Mandi (Beas-Sutlej Link)', group: 'Himachal Pradesh' },
+  { id: 'JK-001', name: 'Srinagar (Jhelum Floodplain)', group: 'J&K' },
+  { id: 'JK-002', name: 'Anantnag (Lidder Valley)', group: 'J&K' },
+  { id: 'JK-003', name: 'Rajouri (Pir Panjal)', group: 'J&K' },
+  { id: 'NE-001', name: 'Cherrapunji / Sohra, Meghalaya', group: 'Northeast' },
+  { id: 'NE-002', name: 'Gangtok (Teesta Basin), Sikkim', group: 'Northeast' },
+  { id: 'NE-003', name: 'Haflong (Dima Hasao), Assam', group: 'Northeast' },
+  { id: 'NE-004', name: 'Itanagar, Arunachal Pradesh', group: 'Northeast' },
+  { id: 'NE-005', name: 'Imphal Valley, Manipur', group: 'Northeast' },
+  { id: 'NE-006', name: 'Aizawl (Tlawng Basin), Mizoram', group: 'Northeast' },
+  { id: 'NE-007', name: 'Kohima, Nagaland', group: 'Northeast' },
+  { id: 'NE-008', name: 'Mawsynram Plateau, Meghalaya', group: 'Northeast' },
+  { id: 'WG-001', name: 'Wayanad (Chooralmala), Kerala', group: 'Western Ghats' },
+  { id: 'WG-002', name: 'Munnar (Muthirapuzha), Kerala', group: 'Western Ghats' },
+  { id: 'WG-003', name: 'Mahabaleshwar & Chiplun, Maharashtra', group: 'Western Ghats' },
+  { id: 'WG-004', name: 'Coorg / Madikeri, Karnataka', group: 'Western Ghats' },
+  { id: 'WG-005', name: 'Nilgiris (Coonoor-Ooty), Tamil Nadu', group: 'Western Ghats' },
+  { id: 'WG-006', name: 'Idukki (Periyar Dam Zone), Kerala', group: 'Western Ghats' },
+  { id: 'WG-007', name: 'Amboli Ghat, Maharashtra', group: 'Western Ghats' },
+  { id: 'WG-008', name: 'Goa Hinterland (Sanguem Ghats)', group: 'Western Ghats' },
 ];
 
 export default function SimulationPanel({ onUpdate }: SimulationPanelProps) {
-  const [liveMode, setLiveMode] = useState(false);
+  const [liveMode, setLiveMode] = useState(true);
   const [params, setParams] = useState({
-    location_id: "UK-001",
+    location_id: 'UK-001',
     rainfall: 15,
     soil_moisture: 45,
     water_level: 2.5,
     rise_rate: 0.1,
-    upstream_water_level: 0.0
+    upstream_water_level: 0.0,
   });
 
   useEffect(() => {
-    // Fetch initial mode state from backend
-    axios.get(`${API_BASE_URL}/api/mode`).then(res => {
-      setLiveMode(res.data.live_mode);
-    }).catch(console.error);
+    axios
+      .get(`${API_BASE_URL}/api/mode`)
+      .then((res) => {
+        setLiveMode(res.data.live_mode);
+      })
+      .catch(console.error);
   }, []);
 
   const toggleLiveMode = async () => {
@@ -71,19 +68,17 @@ export default function SimulationPanel({ onUpdate }: SimulationPanelProps) {
       await axios.post(`${API_BASE_URL}/api/mode`, { live_mode: newMode });
       if (onUpdate) onUpdate();
     } catch (err) {
-      console.error("Failed to toggle live mode:", err);
+      console.error('Failed to toggle live mode:', err);
     }
   };
 
   const triggerBackendUpdate = async (updatedParams: typeof params) => {
     try {
-      // If we manually slide, UI should show manual mode
-      if (liveMode) setLiveMode(false); 
-      
+      if (liveMode) setLiveMode(false);
       await axios.post(`${API_BASE_URL}/api/simulation/scenario`, updatedParams);
       if (onUpdate) onUpdate();
     } catch (err) {
-      console.error("Failed to update simulation scenario:", err);
+      console.error('Failed to update simulation scenario:', err);
     }
   };
 
@@ -91,8 +86,8 @@ export default function SimulationPanel({ onUpdate }: SimulationPanelProps) {
     const locId = e.target.value;
     const newParams = { ...params, location_id: locId };
     setParams(newParams);
-    if(!liveMode) {
-        triggerBackendUpdate(newParams);
+    if (!liveMode) {
+      triggerBackendUpdate(newParams);
     }
   };
 
@@ -116,144 +111,168 @@ export default function SimulationPanel({ onUpdate }: SimulationPanelProps) {
   };
 
   return (
-    <div className="bg-slate-800/90 p-4 border border-slate-700/80 rounded-xl backdrop-blur-sm relative">
+    <div className="bg-paper-2 p-4 border border-rule rounded-xl relative">
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-white font-bold flex items-center gap-2 text-sm uppercase tracking-wider">
-          <Sliders size={16} className="text-emerald-400" /> Multi-Source Simulator
+        <h3 className="text-ink font-medium flex items-center gap-2 text-sm">
+          <Sliders size={16} className="text-accent" /> Scenario simulation panel
         </h3>
-        
+
         {/* Toggle Live Mode Button */}
-        <button 
+        <button
+          type="button"
           onClick={toggleLiveMode}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded text-[10px] font-bold uppercase tracking-widest border transition-all ${
-            liveMode 
-              ? 'bg-blue-900/40 border-blue-500/50 text-blue-300 shadow-[0_0_10px_rgba(59,130,246,0.3)]' 
-              : 'bg-slate-900 border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-500'
-          }`}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-normal border transition-colors whitespace-nowrap text-nowrap active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 disabled:cursor-not-allowed bg-paper-3 border-rule text-muted hover:text-ink"
+          title="Toggle telemetry mode"
+          aria-label="Toggle live telemetry mode"
         >
           {liveMode ? (
-            <><Satellite size={12} className="animate-pulse text-blue-400" /> Live Data ON</>
+            <span className="flex items-center gap-1 text-ok whitespace-nowrap">
+              <Satellite size={12} /> Live stream
+            </span>
           ) : (
-            <><Zap size={12} /> Live Data OFF</>
+            <span className="flex items-center gap-1 text-accent whitespace-nowrap">
+              <Zap size={12} /> Manual mode
+            </span>
           )}
         </button>
       </div>
 
       {/* Location Selector */}
       <div className="mb-4">
-        <label className="text-slate-300 text-xs font-semibold flex items-center gap-1.5 mb-1.5">
-          <MapPin size={13} className="text-cyan-400" /> Target Indian Region
+        <label className="text-ink-2 text-xs font-medium flex items-center gap-1.5 mb-1.5">
+          <MapPin size={13} className="text-accent" /> Target mountain basin
         </label>
         <select
           value={params.location_id}
           onChange={handleLocationChange}
-          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 font-medium focus:outline-none focus:border-cyan-500 transition-colors"
+          className="w-full bg-paper-3 border border-rule rounded-lg px-3 py-2 text-xs text-ink font-normal focus:outline-none focus:border-accent transition-colors"
         >
-          {INDIAN_LOCATIONS.map(loc => (
+          {INDIAN_LOCATIONS.map((loc) => (
             <option key={loc.id} value={loc.id}>
               [{loc.group}] {loc.name}
             </option>
           ))}
         </select>
       </div>
-      
+
+      {/* Status banner */}
+      {!liveMode && (
+        <div className="mb-3 px-2.5 py-1.5 rounded bg-accent-soft border border-accent text-accent text-xs flex items-center justify-between">
+          <span>Simulation active: parameters overridden</span>
+          <span className="font-medium px-1.5 py-0.5 rounded bg-accent text-accent-ink text-xs">SIMULATED</span>
+        </div>
+      )}
+
       {/* Overlay when Live Mode is ON */}
       <div className="relative">
         {liveMode && (
-            <div className="absolute inset-0 z-10 bg-slate-900/60 backdrop-blur-[2px] rounded-lg flex flex-col items-center justify-center border border-blue-900/30">
-                <Satellite size={28} className="text-blue-400 animate-pulse mb-2" />
-                <span className="text-xs font-bold text-blue-300 uppercase tracking-widest">ISRO / IMD Stream Active</span>
-                <span className="text-[10px] text-blue-200/70 text-center px-4 mt-1">Real-time parameters are being fetched automatically.<br/>Turn off to simulate disasters manually.</span>
-            </div>
+          <div className="absolute inset-0 z-10 bg-paper-2/90 rounded-lg flex flex-col items-center justify-center border border-rule p-4">
+            <Satellite size={24} className="text-ok mb-2" />
+            <span className="text-xs font-medium text-ink">Live telemetry stream active</span>
+            <span className="text-xs text-muted text-center mt-1">
+              Parameters are synced automatically. Turn off to run manual scenario stresses.
+            </span>
+          </div>
         )}
 
-        <div className={liveMode ? 'opacity-30 pointer-events-none' : ''}>
+        <div className={liveMode ? 'opacity-25 pointer-events-none' : ''}>
           {/* Presets */}
           <div className="flex gap-2 mb-4">
-            <button 
+            <button
+              type="button"
               onClick={() => setPreset('normal')}
-              className="flex-1 py-1 text-[11px] font-semibold bg-slate-900 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 transition-colors"
+              className="flex-1 py-1 text-xs font-normal bg-paper-3 hover:bg-paper text-ink rounded border border-rule transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Normal
+              Normal baseline
             </button>
-            <button 
+            <button
+              type="button"
               onClick={() => setPreset('flash_flood')}
-              className="flex-1 py-1 text-[11px] font-semibold bg-orange-950/40 hover:bg-orange-900/60 text-orange-300 rounded border border-orange-800/60 transition-colors"
+              className="flex-1 py-1 text-xs font-normal bg-bad-soft text-bad rounded border border-bad transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Flash Flood
+              Flash flood stress
             </button>
-            <button 
+            <button
+              type="button"
               onClick={() => setPreset('cloudburst')}
-              className="flex-1 py-1 text-[11px] font-semibold bg-red-950/40 hover:bg-red-900/60 text-red-300 rounded border border-red-800/60 transition-colors"
+              className="flex-1 py-1 text-xs font-normal bg-bad text-ink rounded border border-bad transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Cloudburst
+              Cloudburst extreme
             </button>
           </div>
-          
+
           <div className="space-y-3.5">
             <div>
-              <div className="text-slate-300 text-xs flex justify-between mb-1">
-                <span className="flex items-center gap-1"><CloudRain size={13} className="text-blue-400"/> Rainfall Intensity</span>
-                <span className="font-mono text-cyan-300 font-bold">{params.rainfall} mm/hr</span>
+              <div className="text-muted text-xs flex justify-between mb-1">
+                <span className="flex items-center gap-1">
+                  <CloudRain size={13} className="text-cool" /> Precipitation intensity
+                </span>
+                <span className="text-ink font-medium num">{params.rainfall} mm/hr</span>
               </div>
-              <input 
-                type="range" 
-                name="rainfall" 
-                min="0" 
-                max="150" 
-                value={params.rainfall} 
-                onChange={handleChange} 
-                className="w-full h-1.5 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-blue-500" 
+              <input
+                type="range"
+                name="rainfall"
+                min="0"
+                max="150"
+                value={params.rainfall}
+                onChange={handleChange}
+                className="w-full h-1.5 bg-paper rounded-lg appearance-none cursor-pointer accent-accent"
               />
             </div>
 
             <div>
-              <div className="text-slate-300 text-xs flex justify-between mb-1">
-                <span className="flex items-center gap-1"><Droplets size={13} className="text-amber-400"/> Soil Saturation</span>
-                <span className="font-mono text-amber-300 font-bold">{params.soil_moisture}%</span>
+              <div className="text-muted text-xs flex justify-between mb-1">
+                <span className="flex items-center gap-1">
+                  <Droplets size={13} className="text-accent" /> Soil saturation
+                </span>
+                <span className="text-ink font-medium num">{params.soil_moisture}%</span>
               </div>
-              <input 
-                type="range" 
-                name="soil_moisture" 
-                min="0" 
-                max="100" 
-                value={params.soil_moisture} 
-                onChange={handleChange} 
-                className="w-full h-1.5 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-amber-500" 
+              <input
+                type="range"
+                name="soil_moisture"
+                min="0"
+                max="100"
+                value={params.soil_moisture}
+                onChange={handleChange}
+                className="w-full h-1.5 bg-paper rounded-lg appearance-none cursor-pointer accent-accent"
               />
             </div>
 
             <div>
-              <div className="text-slate-300 text-xs flex justify-between mb-1">
-                <span className="flex items-center gap-1"><Waves size={13} className="text-cyan-400"/> River Rise Velocity</span>
-                <span className="font-mono text-cyan-300 font-bold">{params.rise_rate} m/hr</span>
+              <div className="text-muted text-xs flex justify-between mb-1">
+                <span className="flex items-center gap-1">
+                  <Waves size={13} className="text-cool" /> River stage surge rate
+                </span>
+                <span className="text-ink font-medium num">{params.rise_rate} m/hr</span>
               </div>
-              <input 
-                type="range" 
-                name="rise_rate" 
-                min="0" 
-                max="3" 
-                step="0.1" 
-                value={params.rise_rate} 
-                onChange={handleChange} 
-                className="w-full h-1.5 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-cyan-500" 
+              <input
+                type="range"
+                name="rise_rate"
+                min="0"
+                max="3"
+                step="0.1"
+                value={params.rise_rate}
+                onChange={handleChange}
+                className="w-full h-1.5 bg-paper rounded-lg appearance-none cursor-pointer accent-accent"
               />
             </div>
 
             <div>
-              <div className="text-slate-300 text-xs flex justify-between mb-1">
-                <span className="flex items-center gap-1"><MapPin size={13} className="text-purple-400"/> Upstream Hazard (Inflow)</span>
-                <span className="font-mono text-purple-300 font-bold">+{params.upstream_water_level} m/hr</span>
+              <div className="text-muted text-xs flex justify-between mb-1">
+                <span className="flex items-center gap-1">
+                  <MapPin size={13} className="text-accent" /> Upstream cascade inflow
+                </span>
+                <span className="text-ink font-medium num">+{params.upstream_water_level} m/hr</span>
               </div>
-              <input 
-                type="range" 
-                name="upstream_water_level" 
-                min="0" 
-                max="3" 
-                step="0.1" 
-                value={params.upstream_water_level} 
-                onChange={handleChange} 
-                className="w-full h-1.5 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-purple-500" 
+              <input
+                type="range"
+                name="upstream_water_level"
+                min="0"
+                max="3"
+                step="0.1"
+                value={params.upstream_water_level}
+                onChange={handleChange}
+                className="w-full h-1.5 bg-paper rounded-lg appearance-none cursor-pointer accent-accent"
               />
             </div>
           </div>

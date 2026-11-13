@@ -1,7 +1,35 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: Console (by request)
+ * nav: sidebar · signature: radar map · states: live / simulated · console: hydro dials
+ * axes: dark/grotesk-sans/chromatic-amber · posture: restrained · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P_ H_ E_ S_ R_ V_ · weakest: S, restrained monochrome surfaces with chromatic amber accents */
+@import "./tokens.css";
+@import "./base.css";
 @import "tailwindcss";
 
+@theme {
+  --color-paper: var(--color-paper);
+  --color-paper-2: var(--color-paper-2);
+  --color-paper-3: var(--color-paper-3);
+  --color-ink: var(--color-ink);
+  --color-ink-2: var(--color-ink-2);
+  --color-muted: var(--color-muted);
+  --color-rule: var(--color-rule);
+  --color-rule-2: var(--color-rule-2);
+  --color-accent: var(--color-accent);
+  --color-accent-ink: var(--color-accent-ink);
+  --color-accent-soft: var(--color-accent-soft);
+  --color-cool: var(--color-cool);
+  --color-cool-soft: var(--color-cool-soft);
+  --color-ok: var(--color-ok);
+  --color-ok-soft: var(--color-ok-soft);
+  --color-bad: var(--color-bad);
+  --color-bad-soft: var(--color-bad-soft);
+  --font-display: var(--font-display);
+  --font-outlier: var(--font-outlier);
+}
+
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: var(--font-display);
   line-height: 1.5;
   font-weight: 400;
   color-scheme: dark;
@@ -10,19 +38,22 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background-color: #0f172a;
-  color: #e2e8f0;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  overflow-x: clip;
+}
+
+button:active, a:active {
+  transform: translateY(1px);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DARK MAP TILES — CSS filter to make free OSM tiles look dark/tactical
-   This eliminates the need for CARTO API keys entirely.
+   TACTICAL MAP TILES & ATTRIBUTION STYLING
    ═══════════════════════════════════════════════════════════════════ */
 .dark-map .leaflet-tile-pane {
-  filter: brightness(0.55) invert(1) contrast(2.8) hue-rotate(200deg) saturate(0.3) brightness(0.8);
+  filter: brightness(0.6) invert(1) contrast(2.5) hue-rotate(200deg) saturate(0.25) brightness(0.75);
 }
 
-/* Keep markers, popups, controls, overlays unaffected by the tile filter */
 .dark-map .leaflet-marker-pane,
 .dark-map .leaflet-shadow-pane,
 .dark-map .leaflet-overlay-pane,
@@ -32,12 +63,12 @@ body {
   filter: none !important;
 }
 
-/* Leaflet attribution bar: make it blend with dark theme */
 .leaflet-control-attribution {
-  background: rgba(15, 23, 42, 0.8) !important;
-  color: #64748b !important;
-  font-size: 9px !important;
+  background: var(--color-paper-2) !important;
+  color: var(--color-muted) !important;
+  font-size: var(--text-xs) !important;
+  border: 1px solid var(--color-rule);
 }
 .leaflet-control-attribution a {
-  color: #38bdf8 !important;
+  color: var(--color-accent) !important;
 }

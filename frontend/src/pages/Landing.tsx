@@ -1,77 +1,85 @@
 import { Link } from 'react-router-dom';
-import { ShieldAlert, Activity, Users, Satellite, Radio, Sparkles } from 'lucide-react';
+import { ShieldAlert, Activity, Users, Satellite, Radio, Info } from 'lucide-react';
 
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black relative overflow-hidden">
-      {/* Background glow & grid effect */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b15_1px,transparent_1px),linear-gradient(to_bottom,#1e293b15_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] pointer-events-none" />
-
-      <div className="text-center max-w-4xl mx-auto space-y-7 relative z-10">
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono font-bold uppercase tracking-widest mb-2 shadow-lg shadow-emerald-950/50">
-          <Sparkles size={14} /> Smart India Hackathon 2026 Prototype
+    <div className="min-h-screen bg-paper text-ink flex flex-col items-center justify-center p-6 relative">
+      <div className="text-center max-w-3xl mx-auto space-y-6 relative z-10">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-paper-2 border border-rule text-muted text-xs">
+          <span>Flash flood intelligence platform</span>
         </div>
 
-        <div className="flex justify-center mb-4">
-          <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-3xl shadow-[0_0_50px_rgba(16,185,129,0.2)]">
-            <ShieldAlert size={68} className="text-emerald-400 animate-pulse" />
+        <div className="flex justify-center mb-2">
+          <div className="p-3 bg-paper-2 border border-rule rounded-2xl text-accent">
+            <ShieldAlert size={48} />
           </div>
         </div>
-        
-        <h1 className="text-5xl md:text-8xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 via-cyan-400 to-blue-500 leading-tight">
+
+        <h1 className="text-4xl md:text-6xl font-medium tracking-tight text-ink leading-tight">
           JALRAKSHAK
         </h1>
-        
-        <h2 className="text-xl md:text-2xl font-medium text-slate-200">
-          Hyper-Local Flash Flood Intelligence & Early Warning System
+
+        <h2 className="text-lg md:text-xl font-normal text-muted max-w-xl mx-auto">
+          Operational mountain flood intelligence and early-warning decision support system
         </h2>
-        
-        <p className="text-sm md:text-base text-slate-400 max-w-2xl mx-auto leading-relaxed">
-          Predict earlier. Warn locally. Act faster. Real-time multi-source data fusion combining 
-          <span className="text-cyan-300 font-semibold"> ISRO INSAT-3DR</span>, 
-          <span className="text-blue-300 font-semibold"> NASA GPM</span>, 
-          <span className="text-emerald-300 font-semibold"> Sentinel-1 SAR</span>, and ground IoT radar arrays.
+
+        <p className="text-sm text-muted max-w-xl mx-auto leading-relaxed">
+          Real-time multi-source data fusion combining ISRO INSAT-3DR, NASA GPM,
+          Copernicus Sentinel-1 SAR, and ground IoT hydrological radar arrays.
         </p>
 
         {/* Agency Badges */}
-        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-          <span className="flex items-center gap-1.5 px-3 py-1 bg-slate-900/80 border border-slate-800 rounded-lg text-xs text-slate-300 font-mono">
-            <Satellite size={13} className="text-orange-400" /> ISRO MOSDAC
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-paper-2 border border-rule rounded-md text-xs text-ink-2">
+            <Satellite size={13} className="text-accent" /> ISRO MOSDAC
           </span>
-          <span className="flex items-center gap-1.5 px-3 py-1 bg-slate-900/80 border border-slate-800 rounded-lg text-xs text-slate-300 font-mono">
-            <Satellite size={13} className="text-blue-400" /> NASA GPM IMERG
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-paper-2 border border-rule rounded-md text-xs text-ink-2">
+            <Satellite size={13} className="text-cool" /> NASA GPM IMERG
           </span>
-          <span className="flex items-center gap-1.5 px-3 py-1 bg-slate-900/80 border border-slate-800 rounded-lg text-xs text-slate-300 font-mono">
-            <Satellite size={13} className="text-cyan-400" /> Copernicus Sentinel-1
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-paper-2 border border-rule rounded-md text-xs text-ink-2">
+            <Satellite size={13} className="text-cool" /> Copernicus Sentinel-1
           </span>
-          <span className="flex items-center gap-1.5 px-3 py-1 bg-slate-900/80 border border-slate-800 rounded-lg text-xs text-slate-300 font-mono">
-            <Radio size={13} className="text-emerald-400" /> IMD Doppler Radar Grid
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-paper-2 border border-rule rounded-md text-xs text-ink-2">
+            <Radio size={13} className="text-ok" /> IMD Doppler Radar
           </span>
         </div>
 
         {/* Portal Entry Buttons */}
-        <div className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
-          <Link 
-            to="/admin" 
-            className="group relative p-6 bg-slate-900/80 hover:bg-slate-800/90 border border-slate-800 hover:border-emerald-500/80 rounded-2xl transition-all duration-300 flex flex-col items-center gap-3 shadow-xl hover:shadow-emerald-950/40 hover:-translate-y-1"
+        <div className="pt-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl mx-auto text-left">
+          <Link
+            to="/admin"
+            className="p-5 bg-paper-2 hover:bg-paper-3 border border-rule hover:border-rule-2 rounded-xl transition-colors flex flex-col items-start gap-2 focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.98]"
           >
-            <div className="p-3 bg-emerald-500/10 rounded-xl text-emerald-400 group-hover:scale-110 transition-transform">
-              <Activity size={28} />
+            <div className="p-2 bg-paper border border-rule rounded-lg text-accent">
+              <Activity size={20} />
             </div>
-            <span className="font-black text-lg text-white">OPEN CONTROL ROOM</span>
-            <span className="text-xs text-slate-400 text-center">For NDMA, SDMA, District Emergency Officers & Responders</span>
+            <span className="font-medium text-base text-ink">Operational command center</span>
+            <span className="text-xs text-muted">
+              For disaster management authorities, emergency officers, and verified responders
+            </span>
           </Link>
-          
-          <Link 
-            to="/citizen" 
-            className="group relative p-6 bg-slate-900/80 hover:bg-slate-800/90 border border-slate-800 hover:border-cyan-500/80 rounded-2xl transition-all duration-300 flex flex-col items-center gap-3 shadow-xl hover:shadow-cyan-950/40 hover:-translate-y-1"
+
+          <Link
+            to="/citizen"
+            className="p-5 bg-paper-2 hover:bg-paper-3 border border-rule hover:border-rule-2 rounded-xl transition-colors flex flex-col items-start gap-2 focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.98]"
           >
-            <div className="p-3 bg-cyan-500/10 rounded-xl text-cyan-400 group-hover:scale-110 transition-transform">
-              <Users size={28} />
+            <div className="p-2 bg-paper border border-rule rounded-lg text-cool">
+              <Users size={20} />
             </div>
-            <span className="font-black text-lg text-white">PUBLIC SAFETY VIEW</span>
-            <span className="text-xs text-slate-400 text-center">For Citizens, Gram Panchayats & Multilingual Safe Routing</span>
+            <span className="font-medium text-base text-ink">Citizen public safety portal</span>
+            <span className="text-xs text-muted">
+              For local communities, gram panchayats, and accessible safe routing
+            </span>
           </Link>
+        </div>
+
+        {/* Mandatory Life-Safety Disclaimer Banner (Ground Rule 4) */}
+        <div className="mt-8 p-3 bg-paper-2 border border-rule rounded-lg text-xs text-muted max-w-xl mx-auto text-center flex items-center justify-center gap-2">
+          <Info size={14} className="text-accent shrink-0" />
+          <span>
+            Decision-support only. Not a certified warning system; must be validated by qualified
+            authorities (IMD, CWC, NDMA) before operational action.
+          </span>
         </div>
       </div>
     </div>
