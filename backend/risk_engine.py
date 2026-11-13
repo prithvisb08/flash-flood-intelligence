@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple, Optional
 import math
+import pandas as pd
 from schemas import (
     PredictionResult, TrajectoryPoint, ModelEnsembleData,
     ExposureData, SatelliteSourceInfo
@@ -120,10 +121,16 @@ def calculate_location_risk(
     if model is not None:
         try:
             # Features expected by trained pipeline:
-            # ['rainfall_1h', 'rainfall_24h', 'soil_moisture', 'water_level', 'water_level_rise_rate', 'slope_degree', 'hist_vulnerability']
-            features = [[rain, rain_24h, soil, water_lvl, rise_rate, dyn_slope, vuln]]
+            feature_cols = [
+                'rainfall_1h', 'rainfall_24h', 'soil_moisture',
+                'water_level', 'water_level_rise_rate', 'slope_degree', 'hist_vulnerability'
+            ]
+            features_df = pd.DataFrame(
+                [[rain, rain_24h, soil, water_lvl, rise_rate, dyn_slope, vuln]],
+                columns=feature_cols
+            )
             if hasattr(model, "predict_proba"):
-                probs = model.predict_proba(features)[0]
+                probs = model.predict_proba(features_df)[0]
                 # Probability of significant flood (class 1, 2, or 3)
                 if len(probs) == 4:
                     # Classes 0: Low, 1: Moderate, 2: High, 3: Critical
@@ -131,7 +138,7 @@ def calculate_location_risk(
                 else:
                     rf_prob = float(probs[-1] * 100.0)
             else:
-                rf_prob = float(model.predict(features)[0] * 25.0)
+                rf_prob = float(model.predict(features_df)[0] * 25.0)
         except Exception:
             rf_prob = min(99.0, max(2.0, physical_risk * 0.90))
     else:

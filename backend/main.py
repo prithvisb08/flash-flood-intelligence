@@ -809,6 +809,7 @@ async def ai_query(
     }
 
 
+@app.get("/api/health")
 @app.get("/api/system/health")
 def system_health():
     online_sensors = sum(1 for s in sensors if s["online"])
