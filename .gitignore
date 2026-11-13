@@ -17,6 +17,7 @@ build/
 .ruff_cache/
 .mypy_cache/
 .coverage
+.coverage.*
 htmlcov/
 *.log
 

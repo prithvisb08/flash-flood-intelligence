@@ -215,22 +215,32 @@ def generate_spatial_heatmap(location_id: str, lat: float, lng: float, risk_leve
     points = []
     # Base intensity based on risk
     base_prob = 0.2
-    if risk_level == "CRITICAL": base_prob = 0.95
-    elif risk_level == "HIGH": base_prob = 0.75
-    elif risk_level == "MODERATE": base_prob = 0.45
-    
-    # Generate 100 points around center
-    import random
-    for i in range(100):
-        # Normal distribution around center, tighter spread for higher intensity
-        spread = 0.015 if risk_level in ["CRITICAL", "HIGH"] else 0.03
-        plat = random.gauss(lat, spread)
-        plng = random.gauss(lng, spread)
-        
-        # Intensity decays by distance from epicenter
-        dist = math.sqrt((plat - lat)**2 + (plng - lng)**2)
-        intensity = max(0.1, base_prob - (dist * 15))
-        
-        points.append([plat, plng, round(intensity, 2)])
-        
+    if risk_level == "CRITICAL":
+        base_prob = 0.95
+    elif risk_level == "HIGH":
+        base_prob = 0.75
+    elif risk_level == "MODERATE":
+        base_prob = 0.45
+
+    # Deterministic concentric radial dispersion (10 concentric rings of 10 points = 100 points)
+    max_radius = 0.018 if risk_level in ["CRITICAL", "HIGH"] else 0.032
+    num_rings = 10
+    points_per_ring = 10
+
+    for ring_idx in range(num_rings):
+        # Quadratic radial spacing to approximate Gaussian density near center
+        frac = (ring_idx + 1) / num_rings
+        r = max_radius * (frac ** 1.5)
+        phase_shift = (ring_idx * 0.314)  # Golden ratio angular offset per ring
+
+        for pt_idx in range(points_per_ring):
+            angle = (2.0 * math.pi * pt_idx / points_per_ring) + phase_shift
+            plat = round(lat + (r * math.cos(angle)), 6)
+            plng = round(lng + (r * math.sin(angle)), 6)
+
+            # Intensity decays monotonically from epicenter
+            dist = math.sqrt((plat - lat) ** 2 + (plng - lng) ** 2)
+            intensity = max(0.08, base_prob - (dist * 16.0))
+            points.append([plat, plng, round(intensity, 2)])
+
     return points

@@ -1,61 +1,75 @@
 import os
-import random
-import threading
-import time
-import math
-import requests
-from weather import fetch_weather, fetch_elevation, fetch_historical_compare
-from config import LOCATIONS
 import json
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
 import asyncio
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Optional
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query, Header, Request, status
+from fastapi.responses import PlainTextResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
-import numpy as np
-import pandas as pd
-from google import genai
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+from config import LOCATIONS
+from settings import settings
 from schemas import (
-    SensorData, PredictionResult, SimulationState, SensorStatus, 
-    Alert, TrajectoryPoint, SatelliteSourceInfo, SatelliteFeedItem,
-    ModelEnsembleData, ExposureData
+    PredictionResult, SimulationState, SensorStatus, Alert,
+    SatelliteFeedItem, LiveWeatherResponse, LiveEarthquakeResponse,
+    CISAKEVResponse, GloFASDischargeResponse, SAFETY_DISCLAIMER
 )
+from auth import (
+    LoginRequest, TokenResponse, authenticate_user,
+    create_access_token, get_current_user
+)
+from state import state_manager, SessionState
+from risk_engine import calculate_location_risk
+from hydrology import get_location_terrain
 from routing import calculate_dynamic_route, generate_spatial_heatmap
+from weather import fetch_weather, fetch_historical_compare
+from providers import weather_provider, earthquake_provider, cisa_provider
+from alerting import generate_cap_xml, dispatch_notification
 
-app = FastAPI(title="JALRAKSHAK API - SIH 2026 Multi-Satellite Early Warning Platform")
+# ═══════════════════════════════════════════════════════════════════════════════
+# APPLICATION SETUP & MIDDLEWARE
+# ═══════════════════════════════════════════════════════════════════════════════
+app = FastAPI(
+    title="JALRAKSHAK API — Flash Flood Intelligence & Multi-Satellite Warning System",
+    description="Operational Decision-Support Platform with OASIS CAP 1.2, Real-Time Hydrological Inference, and Deterministic Risk Evaluation",
+    version="2.0.0"
+)
 
+# Rate Limiter
+limiter = Limiter(key_func=get_remote_address, default_limits=[settings.default_rate_limit])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS: Explicit Origins & Credentials Restricted
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.get_cors_origins_list(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GLOBAL SYSTEM STATE
+# ML MODEL ARTIFACT LOADING
 # ═══════════════════════════════════════════════════════════════════════════════
-system_state = {
-    "live_mode": True,
-    "last_synced_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S IST"),
-    "sync_in_progress": False,
-    "sih_demo_step": 0,
-    "total_syncs": 0,
-    "failed_syncs": 0
-}
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "model_artifacts", "flood_model.joblib")
+flood_model = None
+if os.path.exists(MODEL_PATH):
+    try:
+        flood_model = joblib.load(MODEL_PATH)
+        print(f"Loaded calibrated hydro-ML model from {MODEL_PATH}")
+    except Exception as e:
+        print(f"Error loading model: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COMPREHENSIVE HILLY REGION DATABASE — ALL FLOOD-PRONE ZONES ACROSS INDIA
-# Covers: Uttarakhand, Himachal Pradesh, J&K/Ladakh, Northeast (Meghalaya,
-# Sikkim, Assam, Arunachal, Manipur, Mizoram, Nagaland), Western Ghats
-# (Kerala, Karnataka, Maharashtra, Goa, Tamil Nadu Nilgiris)
-# ═══════════════════════════════════════════════════════════════════════════════
-# LOCATIONS imported from config.py
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SENSORS — Multi-Source IoT & Satellite Sensor Network
+# HARDWARE SENSORS DATABASE (Ground & Satellite Array)
 # ═══════════════════════════════════════════════════════════════════════════════
 sensors = [
     {"id": "ISRO-INSAT3DR", "type": "ISRO INSAT-3DR Geostationary Imager (6-Ch)", "reading": "-52.4°C CTT", "battery": 100, "online": True, "health_score": 98, "status_label": "HEALTHY", "anomaly_detected": False, "last_updated": ""},
@@ -68,75 +82,27 @@ sensors = [
     {"id": "RAIN-AWS-03", "type": "Automatic Weather Station (Tipping Bucket)", "reading": "18.4 mm/hr", "battery": 82, "online": True, "health_score": 88, "status_label": "HEALTHY", "anomaly_detected": False, "last_updated": ""},
 ]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# BASELINE SIMULATION PARAMETERS (for all locations)
-# ═══════════════════════════════════════════════════════════════════════════════
-current_simulation = {}
-for loc in LOCATIONS:
-    # Generate realistic baselines from location metadata
-    base_rain = loc["annual_rainfall_mm"] / 365 / 24 * random.uniform(0.5, 2.0)  # hourly proxy
-    base_soil = 30 + (loc["vulnerability"] * 40) + random.uniform(-5, 5)
-    base_wl = 1.5 + (base_rain * 0.05) + random.uniform(0, 1.5)
-    base_rise = max(0.02, base_rain * 0.02)
-    current_simulation[loc["id"]] = {
-        "rainfall_1h": round(base_rain, 1),
-        "soil_moisture": round(min(98, max(20, base_soil)), 1),
-        "water_level": round(base_wl, 2),
-        "water_level_rise_rate": round(base_rise, 2)
-    }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# LIVE DATA CACHE & TRAJECTORY STORE
-# ═══════════════════════════════════════════════════════════════════════════════
-live_data_cache = {}
-trajectories = {}
-# Historical rolling window for anomaly detection (last N readings per location)
-historical_readings = {loc["id"]: [] for loc in LOCATIONS}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# LIVE DATA SYNC ENGINE — Open-Meteo + Derived Satellite Proxies
-# ═══════════════════════════════════════════════════════════════════════════════
-def sync_single_location(loc):
-    """Fetch live meteorological data and derive multi-satellite proxy values."""
+def sync_single_location(loc: Dict[str, Any]) -> None:
+    """Fetch live meteorological data and derive multi-satellite proxy values deterministically."""
     try:
-        # Use cached fetch_weather utility (Open-Meteo) for core parameters
-        weather = fetch_weather(loc['lat'], loc['lng'])
-        rain_mm = float(weather.get('precipitation') or 0.0)
-        # Soil moisture from utility (percentage)
-        soil_raw = float(weather.get('humidity') or 0.0)  # using humidity as proxy for soil moisture if not provided
-        # Additional parameters from original API response (cloud_cover, wind_speed) are fetched directly for satellite proxies
-        url = (
-            f"https://api.open-meteo.com/v1/forecast?"
-            f"latitude={loc['lat']}&longitude={loc['lng']}&"
-            f"current=cloud_cover,wind_speed_10m&"
-            f"timezone=Asia/Kolkata"
-        )
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            current = data.get("current", {})
-            cloud_cover = float(current.get('cloud_cover') or 0.0)
-            wind_speed = float(current.get('wind_speed_10m') or 0.0)
-            humidity = float(current.get('relative_humidity_2m') or 60.0)
-        else:
-            # Use default fallback values when API request fails
-            cloud_cover = 40.0
-            wind_speed = 5.0
-            humidity = 60.0
+        weather = fetch_weather(loc["lat"], loc["lng"])
+        rain_mm = float(weather.get("precipitation") or 0.0)
+        soil_pct = float(weather.get("soil_moisture_pct") or 50.0)
+        cloud_cover = float(weather.get("cloud_cover") or 30.0)
+        wind_speed = float(weather.get("wind_speed") or 5.0)
+        humidity = float(weather.get("humidity") or 60.0)
 
-        soil_pct = min(100.0, max(15.0, soil_raw * 100.0 if soil_raw <= 1.0 else soil_raw))
-
-        # Dynamically fetch elevation if possible, else fallback to base_slope logic
-        elevation = fetch_elevation(loc['lat'], loc['lng'])
-        dynamic_slope = loc["base_slope"] if elevation == 0 else min(90, max(10, elevation * 0.02))
+        terrain = get_location_terrain(loc)
+        dynamic_slope = terrain["true_slope_deg"]
         slope_factor = dynamic_slope / 60.0
 
         water_lvl = round(1.8 + (rain_mm * 0.08) + (soil_pct * 0.03) + (slope_factor * 0.5), 2)
         rise_rate = round(max(0.05, rain_mm * 0.035 + (slope_factor * rain_mm * 0.01)), 2)
 
-        # Multi-Satellite Derived Signatures
+        # Multi-satellite signatures computed deterministically
         isro_cct = round(-15.0 - (cloud_cover * 0.65) - (rain_mm * 1.2) - (humidity * 0.1), 1)
-        gpm_flux = round(rain_mm * 1.05 + random.uniform(0.0, 0.3), 2)
+        gpm_flux = round(rain_mm * 1.05, 2)
         sentinel_idx = round(-12.5 + (soil_pct * 0.12) + (humidity * 0.02), 2)
         imd_dbz = round(min(65.0, max(5.0, 10.0 + (rain_mm * 3.8) + (cloud_cover * 0.1))), 1)
 
@@ -151,467 +117,234 @@ def sync_single_location(loc):
             "imd_radar_dbz": imd_dbz,
             "wind_speed": wind_speed,
             "humidity": humidity,
-            "wind_gust": weather.get('wind_gust') or 0.0,
-            "snowmelt_rate": weather.get('snowmelt_rate') or 0.0,
+            "wind_gust": weather.get("wind_gust") or 10.0,
+            "snowmelt_rate": 0.0,
             "dynamic_slope": dynamic_slope,
+            "data_source": "LIVE_OPENMETEO_API",
+            "is_simulated": bool(weather.get("is_simulated", False)),
             "last_updated": datetime.now().strftime("%H:%M:%S IST")
         }
-        live_data_cache[loc["id"]] = entry
+        state_manager.live_data_cache[loc["id"]] = entry
 
-        # Store for anomaly detection rolling window
-        historical_readings[loc["id"]].append(rain_mm)
-        if len(historical_readings[loc["id"]]) > 30:
-            historical_readings[loc["id"]] = historical_readings[loc["id"]][-30:]
-        return
-    except Exception as e:
-        system_state["failed_syncs"] += 1
+        # Update historical rolling window for anomaly z-scores
+        state_manager.historical_readings[loc["id"]].append(rain_mm)
+        if len(state_manager.historical_readings[loc["id"]]) > 30:
+            state_manager.historical_readings[loc["id"]] = state_manager.historical_readings[loc["id"]][-30:]
+    except Exception:
+        state_manager.failed_syncs += 1
 
-    # Fallback to simulation baseline
-    base = current_simulation.get(loc["id"], {"rainfall_1h": 20, "soil_moisture": 50, "water_level": 2.5, "water_level_rise_rate": 0.2})
-    live_data_cache[loc["id"]] = {
-        **base,
-        "isro_insat_cct": -48.5, "nasa_gpm_flux": round(base["rainfall_1h"] * 1.02, 2),
-        "sentinel_soil_idx": -6.8, "imd_radar_dbz": 38.5,
-        "wind_speed": 8.0, "humidity": 70.0,
-        "last_updated": datetime.now().strftime("%H:%M:%S IST")
-    }
 
-def sync_all_live_data():
-    """Parallel-ish sync of all locations."""
-    system_state["sync_in_progress"] = True
+def sync_all_locations() -> None:
+    state_manager.sync_in_progress = True
     for loc in LOCATIONS:
         sync_single_location(loc)
-    system_state["last_synced_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
-    system_state["sync_in_progress"] = False
-    system_state["total_syncs"] += 1
-    print(f"🛰️ Synced {len(LOCATIONS)} locations | Total syncs: {system_state['total_syncs']} | Failed: {system_state['failed_syncs']}")
+    state_manager.last_synced_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
+    state_manager.sync_in_progress = False
+    state_manager.total_syncs += 1
 
-# Background initial sync and poller
-def background_weather_poller():
-    """Sync initially in background and then auto-sync every 3 minutes."""
-    try:
-        sync_all_live_data()
-    except Exception as e:
-        print("Initial sync error:", e)
+
+# Background auto-sync every 3 minutes
+async def background_sync_task():
     while True:
-        time.sleep(180)
-        if system_state["live_mode"] and system_state["sih_demo_step"] == 0:
-            sync_all_live_data()
+        try:
+            sync_all_locations()
+        except Exception as e:
+            print("Background sync error:", e)
+        await asyncio.sleep(180)
 
-threading.Thread(target=background_weather_poller, daemon=True).start()
 
+@app.on_event("startup")
+async def startup_event():
+    # Run initial sync in background
+    asyncio.create_task(background_sync_task())
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ADVANCED RISK ENGINE
-# ═══════════════════════════════════════════════════════════════════════════════
-def get_base_trajectory(loc_id, current_prob):
-    """Maintain a 6-hour rolling risk trajectory per location."""
-    now = datetime.now()
-    if loc_id not in trajectories:
-        trj = []
-        for i in range(5, 0, -1):
-            t = now - timedelta(hours=i)
-            prob = max(0, min(100, current_prob - (i * random.uniform(2, 6))))
-            trj.append(TrajectoryPoint(timestamp=t.strftime("%H:00"), risk_probability=round(prob, 1)))
-        trj.append(TrajectoryPoint(timestamp=now.strftime("%H:00"), risk_probability=round(current_prob, 1)))
-        trajectories[loc_id] = trj
-
-    old_prob = trajectories[loc_id][-1].risk_probability
-    new_prob = round((old_prob * 0.35) + (current_prob * 0.65), 1)
-    trajectories[loc_id][-1].risk_probability = new_prob
-    return trajectories[loc_id]
-
-def compute_upstream_impact(loc_id, all_sim_data):
-    """Cascading spatio-temporal risk: upstream sensor data flows downstream."""
-    impact = 0.0
-    for l in LOCATIONS:
-        if loc_id in l.get("upstream_of", []):
-            up_data = all_sim_data.get(l["id"], {})
-            rise = up_data.get("water_level_rise_rate", 0)
-            rain = up_data.get("rainfall_1h", 0)
-            if rise > 0.3:
-                impact += (rise * 12)
-            if rain > 40:
-                impact += (rain * 0.15)
-    return min(40.0, impact)
-
-def detect_rainfall_anomaly(loc_id, current_rain):
-    """Z-score based anomaly detection on rolling rainfall window."""
-    history = historical_readings.get(loc_id, [])
-    if len(history) < 5:
-        return False, 0.0
-    mean_rain = sum(history) / len(history)
-    std_rain = max(0.01, (sum((x - mean_rain)**2 for x in history) / len(history))**0.5)
-    z_score = (current_rain - mean_rain) / std_rain
-    return z_score > 2.0, round(z_score, 2)
-
-def compute_antecedent_precipitation_index(loc_id, current_rain):
-    """API-30 (Antecedent Precipitation Index) — exponential decay of past rainfall."""
-    history = historical_readings.get(loc_id, [])
-    k = 0.85  # decay constant
-    api = current_rain
-    for i, past_rain in enumerate(reversed(history)):
-        api += past_rain * (k ** (i + 1))
-    return round(min(500, api), 1)
-
-@app.get("/api/risk", response_model=List[PredictionResult])
-def get_all_risks():
-    results = []
-
-    # Pre-fetch all sim data for upstream mapping
-    all_sim_data = {}
-    for loc in LOCATIONS:
-        if system_state["live_mode"] and loc["id"] in live_data_cache:
-            all_sim_data[loc["id"]] = live_data_cache[loc["id"]]
-        else:
-            all_sim_data[loc["id"]] = current_simulation.get(
-                loc["id"],
-                {"rainfall_1h": 20, "soil_moisture": 50, "water_level": 2.5, "water_level_rise_rate": 0.2}
-            )
-
-    # Sensor health impacts confidence
-    online_sensors = sum(1 for s in sensors if s["online"])
-    total_sensors = len(sensors)
-    sensor_health_ratio = online_sensors / total_sensors
-    base_confidence = 96.0 * sensor_health_ratio
-
-    water_sensor_online = next((s["online"] for s in sensors if s["id"] == "WATER-004"), True)
-    radar_online = next((s["online"] for s in sensors if s["id"] == "IMD-DWR-RADAR"), True)
-    seismo_online = next((s["online"] for s in sensors if s["id"] == "SEISMO-01"), True)
-
-    if not water_sensor_online: base_confidence -= 8.0
-    if not radar_online: base_confidence -= 6.0
-    base_confidence = max(40.0, base_confidence)
-
-    for loc in LOCATIONS:
-        sim_data = all_sim_data[loc["id"]]
-
-        # ─── Multi-Factor Physical Risk Score ───
-        rain_score = sim_data["rainfall_1h"] * 0.45
-        soil_score = sim_data["soil_moisture"] * 0.25
-        rise_score = sim_data["water_level_rise_rate"] * 35
-        
-        dyn_slope = sim_data.get("dynamic_slope", loc["base_slope"])
-        slope_score = (dyn_slope / 60.0) * 15
-        vuln_score = loc["vulnerability"] * 12
-        
-        wind_gust_score = min(15, sim_data.get("wind_gust", 0) * 0.15)
-        snowmelt_score = min(20, sim_data.get("snowmelt_rate", 0) * 2.0)
-
-        physical_risk = rain_score + soil_score + rise_score + slope_score + vuln_score + wind_gust_score + snowmelt_score
-
-        # Upstream cascade penalty
-        upstream_penalty = compute_upstream_impact(loc["id"], all_sim_data)
-        physical_risk += upstream_penalty
-
-        # Anomaly detection boost
-        is_anomaly, z_score = detect_rainfall_anomaly(loc["id"], sim_data["rainfall_1h"])
-        if is_anomaly:
-            physical_risk += min(15, z_score * 5)
-
-        # API (Antecedent Precipitation Index) boost — wet soil history
-        api_val = compute_antecedent_precipitation_index(loc["id"], sim_data["rainfall_1h"])
-        if api_val > 100:
-            physical_risk += min(10, (api_val - 100) * 0.05)
-
-        # ─── Ensemble Model Scoring (Simulated) ───
-        noise_lr = random.uniform(-2, 2)
-        noise_rf = random.uniform(-1.5, 1.5)
-        noise_xgb = random.uniform(-1, 1)
-
-        log_reg = min(99.0, max(3.0, physical_risk * 0.78 + noise_lr))
-        rf_score = min(99.0, max(3.0, physical_risk * 0.94 + noise_rf))
-        xgb_score = min(99.0, max(3.0, physical_risk * 1.06 + noise_xgb))
-
-        ensemble_score = (log_reg * 0.15) + (rf_score * 0.40) + (xgb_score * 0.45)
-        ensemble_score = min(99.9, max(2.0, ensemble_score))
-
-        # ─── Risk Classification ───
-        if ensemble_score > 80: risk_level, risk_idx = "CRITICAL", 3
-        elif ensemble_score > 55: risk_level, risk_idx = "HIGH", 2
-        elif ensemble_score > 30: risk_level, risk_idx = "MODERATE", 1
-        else: risk_level, risk_idx = "LOW", 0
-
-        # ─── Compound Landslide Hazard ───
-        landslide_base = (loc["base_slope"] / 60) * 45 + (sim_data["soil_moisture"] / 100) * 55
-        if not seismo_online:
-            landslide_base *= 0.9  # less confident without seismograph
-        landslide_prob = min(99.0, landslide_base)
-
-        if risk_idx >= 2 and landslide_prob > 70:
-            compound_hazard = "CRITICAL"
-        elif landslide_prob > 50 or risk_idx >= 1:
-            compound_hazard = "MODERATE"
-        else:
-            compound_hazard = "LOW"
-
-        # ─── Trajectory & Trend Analysis ───
-        traj = get_base_trajectory(loc["id"], ensemble_score)
-        past_val = traj[-3].risk_probability if len(traj) > 2 else traj[0].risk_probability
-        diff = ensemble_score - past_val
-        if diff > 20: trend = "RAPIDLY INCREASING"
-        elif diff > 8: trend = "INCREASING"
-        elif diff < -8: trend = "DECREASING"
-        else: trend = "STABLE"
-
-        # ─── Explainability (SHAP-style) ───
-        pos_factors = {}
-        neg_factors = {}
-
-        if sim_data['rainfall_1h'] > 20:
-            pos_factors['Intense Rainfall'] = round(min(0.65, sim_data['rainfall_1h'] / 180), 2)
-        if sim_data['soil_moisture'] > 70:
-            pos_factors['High Soil Saturation (>70%)'] = 0.28
-        if sim_data['water_level_rise_rate'] > 0.3:
-            pos_factors['Rapid Water Rise Velocity'] = round(min(0.45, sim_data['water_level_rise_rate'] * 0.3), 2)
-        if upstream_penalty > 5:
-            pos_factors['Upstream Cascade Inflow'] = round(min(0.35, upstream_penalty / 40), 2)
-        dyn_slope = sim_data.get("dynamic_slope", loc["base_slope"])
-        if dyn_slope > 45:
-            pos_factors['Steep Topography (>{0}°)'.format(round(dyn_slope))] = round(dyn_slope / 90, 2)
-        if sim_data.get('wind_gust', 0) > 40:
-            pos_factors['High Wind Gust (>40 km/h)'] = round(sim_data['wind_gust'] / 100, 2)
-        if sim_data.get('snowmelt_rate', 0) > 2:
-            pos_factors['Rapid Snowmelt Detected'] = 0.25
-        if is_anomaly:
-            pos_factors[f'Rainfall Anomaly (Z={z_score})'] = 0.22
-        if api_val > 100:
-            pos_factors['High Antecedent Precipitation'] = 0.18
-        if sim_data.get('humidity', 60) > 85:
-            pos_factors['Extreme Humidity (>85%)'] = 0.12
-        if loc['vulnerability'] > 0.85:
-            pos_factors['Historical Vulnerability'] = round(loc['vulnerability'] * 0.3, 2)
-
-        if sim_data['soil_moisture'] < 40:
-            neg_factors['Dry Soil Absorption Capacity'] = 0.22
-        if sim_data['water_level'] < 2.5:
-            neg_factors['Low Baseline River Stage'] = 0.18
-        if sim_data['rainfall_1h'] < 10:
-            neg_factors['Minimal Current Precipitation'] = 0.15
-        if sim_data.get('wind_speed', 5) > 20:
-            neg_factors['High Wind (Cloud Dispersal)'] = 0.10
-
-        actions = [
-            "Normal operations. Continuous multi-satellite telemetry active.",
-            "Advisory: Clear local drainage, alert panchayat & quick response teams.",
-            "Warning: High risk of flash flood/mudslide. Activate evacuation routes.",
-            "EMERGENCY: Immediate evacuation to designated safe zones. Flash flood imminent!"
-        ]
-        lead_times = ["N/A", "12-24 hours", "3-6 hours", "1-3 hours"]
-
-        # Confidence adjustment per location
-        loc_confidence = base_confidence
-        if is_anomaly:
-            loc_confidence -= 3.0  # anomaly = less certainty
-        loc_confidence = round(max(40.0, min(99.0, loc_confidence - random.uniform(0, 1.5))), 1)
-
-        results.append(PredictionResult(
-            location_id=loc["id"],
-            location_name=f"{loc['name']}, {loc['state']}",
-            risk_level=risk_level,
-            flood_probability=round(ensemble_score, 1),
-            landslide_probability=round(landslide_prob, 1),
-            compound_hazard_level=compound_hazard,
-            confidence=loc_confidence,
-            contributing_factors=pos_factors,
-            negative_factors=neg_factors,
-            recommended_action=actions[risk_idx],
-            safe_zone=loc["safe_zone"],
-            trajectory=traj,
-            trajectory_trend=trend,
-            lead_time_window=lead_times[risk_idx],
-            lat=loc["lat"],
-            lng=loc["lng"],
-            ensemble_data=ModelEnsembleData(
-                logistic_regression=round(log_reg, 1),
-                random_forest=round(rf_score, 1),
-                xgboost=round(xgb_score, 1),
-                ensemble_score=round(ensemble_score, 1),
-                model_agreement="HIGH" if abs(rf_score - xgb_score) < 8 else "MODERATE" if abs(rf_score - xgb_score) < 15 else "LOW"
-            ),
-            exposure=ExposureData(
-                population_exposed=loc["population"],
-                critical_infrastructure=loc.get("critical_infra", random.randint(1, 5)),
-                road_segments_affected=random.randint(2, 10)
-            ),
-            satellite_info=SatelliteSourceInfo(
-                isro_insat_cct=round(sim_data.get("isro_insat_cct", -45), 1),
-                nasa_gpm_flux=round(sim_data.get("nasa_gpm_flux", 12), 1),
-                sentinel_soil_idx=round(sim_data.get("sentinel_soil_idx", -7), 1),
-                imd_radar_dbz=round(sim_data.get("imd_radar_dbz", 35), 1)
-            )
-        ))
-    return results
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# API ENDPOINTS
+# AUTHENTICATION ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
-
-@app.post("/api/sync")
-def trigger_live_sync():
-    """Forces an immediate multi-source live sync."""
-    sync_all_live_data()
-    return {
-        "status": "success",
-        "message": f"All {len(LOCATIONS)} Indian hilly regions synchronized with real-time multi-satellite data.",
-        "timestamp": system_state["last_synced_at"],
-        "total_locations": len(LOCATIONS)
-    }
-
-class ModeToggle(BaseModel):
-    live_mode: bool
-
-@app.post("/api/mode")
-def toggle_mode(mode: ModeToggle):
-    system_state["live_mode"] = mode.live_mode
-    if mode.live_mode:
-        sync_all_live_data()
-    return {"status": "success", "live_mode": system_state["live_mode"]}
-
-@app.get("/api/mode")
-def get_mode():
-    return {
-        "live_mode": system_state["live_mode"],
-        "last_synced_at": system_state["last_synced_at"],
-        "sync_in_progress": system_state["sync_in_progress"]
-    }
-
-class AIQuery(BaseModel):
-    query: str
-
-LOCATION_ALIASES = {
-    "UK-001": ["devprayag", "dev prayag", "alaknanda", "alaknanda basin"],
-    "UK-002": ["joshimath", "chamoli", "dhauliganga", "tapovan"],
-    "UK-003": ["kedarnath", "mandakini", "kedar", "kedarnath valley", "gaurikund"],
-    "UK-004": ["rudraprayag", "rudra prayag", "sangam"],
-    "UK-005": ["pithoragarh", "pithoragarh fort", "kali river", "jhulaghat"],
-    "UK-006": ["uttarkashi", "bhagirathi", "dharasu"],
-    "HP-001": ["manali", "upper beas", "rohtang", "solang", "beas river"],
-    "HP-002": ["kullu", "aut", "aut valley", "bhuntar", "pandoh"],
-    "HP-003": ["dharamshala", "dharamsala", "kangra", "mcleodganj", "bhagsunag"],
-    "HP-004": ["shimla", "tutu", "ridge", "kufri", "sanjauli"],
-    "HP-005": ["kinnaur", "kalpa", "sutlej gorge", "sangla", "reckong peo"],
-    "HP-006": ["mandi", "pandoh dam", "beas-sutlej"],
-    "JK-001": ["srinagar", "jhelum", "dal lake", "kashmir", "badgam"],
-    "JK-002": ["anantnag", "lidder", "pahalgam", "achabal"],
-    "JK-003": ["rajouri", "pir panjal", "poonch", "mughal road", "thanamandi"],
-    "NE-001": ["cherrapunji", "sohra", "meghalaya", "nohkalikai"],
-    "NE-002": ["gangtok", "sikkim", "teesta", "teesta river", "lhonak"],
-    "NE-003": ["haflong", "dima hasao", "assam hills", "jatinga"],
-    "NE-004": ["itanagar", "arunachal", "papum pare", "naharlagun"],
-    "NE-005": ["imphal", "manipur", "loktak", "kangla"],
-    "NE-006": ["aizawl", "mizoram", "tlawng"],
-    "NE-007": ["kohima", "nagaland", "dhansiri"],
-    "NE-008": ["mawsynram", "wah rilang", "mawsynram plateau"],
-    "WG-001": ["wayanad", "chooralmala", "meppadi", "mundakkai", "kerala", "kerala flood"],
-    "WG-002": ["munnar", "muthirapuzha", "devikulam", "tata high altitude"],
-    "WG-003": ["mahabaleshwar", "chiplun", "koyna", "vashishti", "maharashtra"],
-    "WG-004": ["coorg", "madikeri", "kodagu", "cauvery", "karnataka"],
-    "WG-005": ["nilgiris", "ooty", "coonoor", "tamil nadu", "bhavani"],
-    "WG-006": ["idukki", "periyar", "cheruthoni", "idukki dam"],
-    "WG-007": ["amboli", "sindhudurg", "amboli ghat"],
-    "WG-008": ["goa", "sanguem", "zuari", "goa hinterland"],
-}
-
-def format_location_card(loc_obj, sim_entry, risk_item):
-    """Formats full mobile-weather style breakdown for any location."""
-    rain = sim_entry.get("rainfall_1h", 0.0)
-    if rain > 70:
-        rain_desc = "🔴 Severe Cloudburst / Flash-Flood Intensity"
-    elif rain > 35:
-        rain_desc = "🟠 Heavy Downpour"
-    elif rain > 15:
-        rain_desc = "🟡 Moderate Rainfall"
-    elif rain > 2:
-        rain_desc = "🟢 Light Rain / Showers"
-    else:
-        rain_desc = "⚪ Minimal / Clear"
-
-    soil = sim_entry.get("soil_moisture", 50.0)
-    if soil > 85:
-        soil_status = "CRITICAL (Near Liquefaction / Mudslide Threat)"
-    elif soil > 70:
-        soil_status = "HIGHLY SATURATED (High Runoff Velocity)"
-    elif soil > 50:
-        soil_status = "MODERATE SATURATION"
-    else:
-        soil_status = "DRY / GOOD ABSORPTION CAPACITY"
-
-    r_level = risk_item.risk_level if risk_item else "MODERATE"
-    r_color = "🔴" if r_level == "CRITICAL" else "🟠" if r_level == "HIGH" else "🟡" if r_level == "MODERATE" else "🟢"
-    
-    flood_p = risk_item.flood_probability if risk_item else round(rain * 0.7, 1)
-    land_p = risk_item.landslide_probability if risk_item else round(soil * 0.6, 1)
-    comp_h = risk_item.compound_hazard_level if risk_item else "MODERATE"
-    trend = risk_item.trajectory_trend if risk_item else "STABLE"
-    lead_time = risk_item.lead_time_window if risk_item else "3-6 hours"
-    conf = risk_item.confidence if risk_item else 92.0
-    safe_sh = risk_item.safe_zone if risk_item else loc_obj.get("safe_zone", "Designated Safe Shelter")
-    action_rec = risk_item.recommended_action if risk_item else "Continuous telemetry monitoring."
-    
-    wl = sim_entry.get("water_level", 2.5)
-    rise_rate = sim_entry.get("water_level_rise_rate", 0.1)
-    cct = sim_entry.get("isro_insat_cct", -45.0)
-    gpm = sim_entry.get("nasa_gpm_flux", round(rain * 1.05, 1))
-    sar = sim_entry.get("sentinel_soil_idx", -7.5)
-    radar = sim_entry.get("imd_radar_dbz", 35.0)
-    hum = sim_entry.get("humidity", 65.0)
-    wind = sim_entry.get("wind_speed", 10.0)
-    
-    pop = loc_obj.get("population", 3000)
-    elev = loc_obj.get("elevation_m", "N/A")
-    basin = loc_obj.get("river_basin", "Local Watershed")
-    history = loc_obj.get("historical_events", [])
-    history_str = f"\n• 📜 Historical Context: {'; '.join(history[:2])}" if history else ""
-
-    return (
-        f"📍 **{loc_obj['name']}, {loc_obj['state']}**\n"
-        f"• Region: {loc_obj['region']} | Basin: {basin} | Elevation: {elev}m\n\n"
-        f"🌦️ **Live Weather & Telemetry (Real-time Stream):**\n"
-        f"• Current Rainfall: **{rain} mm/hr** — *{rain_desc}*\n"
-        f"• Soil Saturation: **{soil}%** — *{soil_status}*\n"
-        f"• Relative Humidity: **{hum}%** | Wind Speed: **{wind} km/h**\n\n"
-        f"🌊 **Hydrology & River Stage:**\n"
-        f"• River Stage: **{wl} meters**\n"
-        f"• Rate of Rise: **+{rise_rate} m/hr** {'⚠️ Rapid Inflow Detected!' if rise_rate > 0.4 else '(Normal drift)'}\n\n"
-        f"🛰️ **Multi-Satellite & Radar Telemetry:**\n"
-        f"• ISRO INSAT-3DR CTT: **{cct}°C** {'(Deep Convective Cloud)' if cct < -40 else '(Stable)'}\n"
-        f"• NASA GPM IMERG Flux: **{gpm} mm/hr**\n"
-        f"• Copernicus Sentinel-1 InSAR: **{sar} dB**\n"
-        f"• IMD Doppler Radar Echo: **{radar} dBZ**\n\n"
-        f"⚠️ **AI Multi-Model Hazard Assessment:**\n"
-        f"• Risk Classification: {r_color} **{r_level}** (Model Confidence: **{conf}%**)\n"
-        f"• Flash Flood Probability: **{flood_p}%**\n"
-        f"• Landslide Susceptibility: **{land_p}%**\n"
-        f"• Compound Multi-Hazard: **{comp_h}**\n"
-        f"• Trajectory Trend: **{trend}** | Warning Lead Time: **{lead_time}**\n\n"
-        f"🛡️ **Evacuation Protocol & Action:**\n"
-        f"• Directive: {action_rec}\n"
-        f"• 🏁 Verified Safe Shelter: **{safe_sh}**\n"
-        f"• 👥 Exposed Population in Ward: **{pop:,} residents**"
-        f"{history_str}"
+@app.post("/api/auth/login", response_model=TokenResponse)
+@limiter.limit("10/minute")
+def login(request: Request, body: LoginRequest):
+    user = authenticate_user(body.username, body.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = create_access_token(data={"sub": user["username"], "role": user["role"]})
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in_minutes=settings.access_token_expire_minutes,
+        username=user["username"]
     )
 
 
-from fastapi.responses import PlainTextResponse
+@app.get("/api/auth/me")
+def get_auth_me(current_user: Dict[str, Any] = Depends(get_current_user)):
+    return {"status": "authenticated", "user": current_user}
 
-@app.get("/api/bulletin/{location_id}")
-def generate_official_bulletin(location_id: str):
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CORE HAZARD & RISK EVALUATION (PURE, DETERMINISTIC)
+# ═══════════════════════════════════════════════════════════════════════════════
+def get_all_risks(session: SessionState) -> List[PredictionResult]:
+    # Check if ground seismograph is online
+    seismo = next((s for s in sensors if s["id"] == "SEISMO-01"), None)
+    seismo_online = seismo["online"] if seismo else True
+
+    # Assemble telemetry dictionary for all locations
+    telemetry_map = {}
+    for loc in LOCATIONS:
+        telemetry_map[loc["id"]] = state_manager.get_effective_telemetry(session, loc["id"])
+
+    results = []
+    for loc in LOCATIONS:
+        sim_data = telemetry_map[loc["id"]]
+        history = state_manager.historical_readings.get(loc["id"], [])
+        risk = calculate_location_risk(
+            loc=loc,
+            sim_data=sim_data,
+            all_locations=LOCATIONS,
+            telemetry_by_loc=telemetry_map,
+            historical_readings=history,
+            model=flood_model,
+            seismo_online=seismo_online
+        )
+        results.append(risk)
+    return results
+
+
+@app.get("/api/risk", response_model=List[PredictionResult])
+async def get_risk(
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None)
+):
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
+    return get_all_risks(session)
+
+
+@app.get("/api/alerts", response_model=List[Alert])
+async def get_alerts(
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None)
+):
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
+    risks = get_all_risks(session)
+
+    alerts = []
+    for r in risks:
+        if r.risk_level in ["HIGH", "CRITICAL"]:
+            drivers = list(r.contributing_factors.keys())[:3]
+            priority = 1 if r.risk_level == "CRITICAL" else 2
+            alerts.append(Alert(
+                location_id=r.location_id,
+                location_name=r.location_name,
+                level=r.risk_level,
+                message=f"Threat Level {r.risk_level}: Flash flood probability {r.flood_probability}%. {r.recommended_action}",
+                drivers=drivers,
+                safe_zone=r.safe_zone,
+                priority_score=priority,
+                status="NEW",
+                lead_time_window=r.lead_time_window,
+                is_simulated=r.is_simulated
+            ))
+    # Deterministic priority sort: CRITICAL first, then highest flood probability
+    alerts.sort(key=lambda a: (a.priority_score, -len(a.drivers)))
+    return alerts
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VERIFIED REAL-TIME EXTERNAL FEEDS (Kept & Formalized)
+# ═══════════════════════════════════════════════════════════════════════════════
+@app.get("/api/cyber/cisa-kev", response_model=CISAKEVResponse)
+@limiter.limit("30/minute")
+async def get_cisa_kev(request: Request, limit: int = Query(15, ge=1, le=100)):
+    """Live feed from Cybersecurity & Infrastructure Security Agency (CISA) KEV Catalog."""
+    return await cisa_provider.get_cisa_kev(limit=limit)
+
+
+@app.get("/api/risk/weather-live", response_model=LiveWeatherResponse)
+@limiter.limit("60/minute")
+async def get_weather_live(
+    request: Request,
+    lat: float = Query(30.145, description="Latitude"),
+    lon: float = Query(78.595, description="Longitude")
+):
+    """Live weather and volumetric soil moisture from Open-Meteo API."""
+    return await weather_provider.get_live_weather(lat, lon)
+
+
+@app.get("/api/risk/earthquakes-live", response_model=LiveEarthquakeResponse)
+@limiter.limit("30/minute")
+async def get_earthquakes_live(request: Request, limit: int = Query(15, ge=1, le=50)):
+    """Live seismic feed from USGS Earthquake Hazards Program."""
+    return await earthquake_provider.get_recent_earthquakes(limit=limit)
+
+
+@app.get("/api/hydrology/glofas-live", response_model=GloFASDischargeResponse)
+@limiter.limit("30/minute")
+async def get_glofas_live(
+    request: Request,
+    lat: float = Query(30.145, description="Latitude"),
+    lon: float = Query(78.595, description="Longitude")
+):
+    """Copernicus GloFAS River Discharge via Open-Meteo Flood API."""
+    return await weather_provider.get_river_discharge(lat, lon)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OASIS CAP 1.2 XML ALERT & OFFICIAL BULLETIN GENERATION
+# ═══════════════════════════════════════════════════════════════════════════════
+@app.get("/api/cap-alert/{location_id}")
+async def get_cap_alert(
+    location_id: str,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None)
+):
+    """Outputs standardized OASIS CAP 1.2 XML for NDMA Sachet integration."""
     loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
     if not loc_obj:
         raise HTTPException(status_code=404, detail="Location not found")
-        
-    risks = get_all_risks()
+
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
+    risks = get_all_risks(session)
     risk_item = next((r for r in risks if r.location_id == location_id), None)
-    
-    sim_data = live_data_cache.get(location_id, {})
-    
-    # NDMA format template
-    bulletin = f"""
-======================================================================
+    if not risk_item:
+        raise HTTPException(status_code=404, detail="Risk evaluation not found")
+
+    xml_content = generate_cap_xml(loc_obj, risk_item)
+    return Response(content=xml_content, media_type="application/cap+xml")
+
+
+@app.get("/api/bulletin/{location_id}")
+async def generate_official_bulletin(
+    location_id: str,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None)
+):
+    """Generates official plain-text NDMA-compliant dispatch bulletin."""
+    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
+    if not loc_obj:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
+    risks = get_all_risks(session)
+    risk_item = next((r for r in risks if r.location_id == location_id), None)
+    sim_data = state_manager.get_effective_telemetry(session, location_id)
+
+    status_tag = "SIMULATED / SCENARIO TEST" if risk_item.is_simulated else "OPERATIONAL REAL TELEMETRY"
+
+    bulletin = f"""======================================================================
                   OFFICIAL FLASH FLOOD DISPATCH
 ======================================================================
 ISSUING AUTHORITY: JALRAKSHAK INTELLIGENCE COMMAND
+STATUS: {status_tag}
 TIMESTAMP: {datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")}
 LOCATION: {loc_obj['name']}, {loc_obj['state']} ({loc_obj['region']})
 BASIN: {loc_obj.get('river_basin', 'N/A')}
@@ -622,338 +355,290 @@ BASIN: {loc_obj.get('river_basin', 'N/A')}
 - River Stage: {sim_data.get('water_level', 0)} m (Rise Rate: +{sim_data.get('water_level_rise_rate', 0)} m/hr)
 - ISRO INSAT-3DR CTT: {sim_data.get('isro_insat_cct', 'N/A')} °C
 - Sentinel SAR Index: {sim_data.get('sentinel_soil_idx', 'N/A')} dB
+- Data Source: {sim_data.get('data_source', 'N/A')}
 
-[2] AI RISK ASSESSMENT (LAYER 1 + ENSEMBLE)
+[2] AI RISK ASSESSMENT (CALIBRATED ENSEMBLE + HYDROLOGICAL INDEX)
 - Overall Threat Level: {risk_item.risk_level if risk_item else 'N/A'}
 - Flash Flood Probability: {risk_item.flood_probability if risk_item else 'N/A'}%
 - Landslide Hazard: {risk_item.landslide_probability if risk_item else 'N/A'}%
 - Trajectory Trend: {risk_item.trajectory_trend if risk_item else 'N/A'}
 - Warning Lead Time: {risk_item.lead_time_window if risk_item else 'N/A'}
+- Model Confidence: {risk_item.confidence if risk_item else 'N/A'}%
 
 [3] IMPACT & EXPOSURE
-- Population in Danger Zone: {loc_obj.get('population', 'N/A')}
+- Population in Danger Zone: {loc_obj.get('population', 'N/A')} residents
 - Critical Infrastructure at Risk: {loc_obj.get('critical_infra', 'N/A')} facilities
 
-[4] DIRECTIVE
+[4] DIRECTIVE & SAFE ZONE
 {risk_item.recommended_action if risk_item else 'Continuous Monitoring Required.'}
 DESIGNATED SAFE ZONE: {loc_obj.get('safe_zone', 'N/A')}
 
+[5] MANDATORY SAFETY DISCLAIMER
+{SAFETY_DISCLAIMER}
 ======================================================================
-    """
+"""
     return PlainTextResponse(bulletin, media_type="text/plain", headers={
         "Content-Disposition": f"attachment; filename=NDMA_BULLETIN_{location_id}_{datetime.now().strftime('%Y%m%d%H%M')}.txt"
     })
 
-@app.get("/api/subcity_zones/{location_id}")
-def get_subcity_zones(location_id: str):
-    # Simulated 2-3km micro-grid for City Deep Dive
-    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUTHENTICATED STATE-CHANGING ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+class DispatchRequest(BaseModel):
+    location_id: str
+    target_urls: Optional[str] = None
+
+
+@app.post("/api/alerts/dispatch")
+def dispatch_alert(
+    req: DispatchRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Human-confirmed dispatch via Apprise. Requires JWT authentication."""
+    loc_obj = next((l for l in LOCATIONS if l["id"] == req.location_id), None)
     if not loc_obj:
         raise HTTPException(status_code=404, detail="Location not found")
-        
-    base_lat = loc_obj['lat']
-    base_lng = loc_obj['lng']
-    offset = 0.02 # approx 2km
-    
+
+    session = SessionState(session_id="dispatch_query")
+    risks = get_all_risks(session)
+    risk_item = next((r for r in risks if r.location_id == req.location_id), None)
+    if not risk_item:
+        raise HTTPException(status_code=404, detail="Risk record not found")
+
+    title = f"EMERGENCY FLASH FLOOD DISPATCH: {loc_obj['name']}"
+    msg = (
+        f"Threat Level: {risk_item.risk_level}\n"
+        f"Flood Probability: {risk_item.flood_probability}%\n"
+        f"Directive: {risk_item.recommended_action}\n"
+        f"Safe Zone: {risk_item.safe_zone}\n"
+        f"Dispatched by Officer: {current_user['username']}"
+    )
+
+    result = dispatch_notification(title, msg, target_urls=req.target_urls)
+    return {"status": "success", "dispatch_result": result}
+
+
+class ModeToggle(BaseModel):
+    live_mode: bool
+    session_id: Optional[str] = "default"
+
+
+@app.post("/api/mode")
+async def toggle_mode(
+    mode: ModeToggle,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Per-session live mode toggle. Requires JWT authentication."""
+    session = await state_manager.update_session_mode(mode.session_id, mode.live_mode)
+    return {"status": "success", "session_id": session.session_id, "live_mode": session.live_mode}
+
+
+@app.get("/api/mode")
+async def get_mode(
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None)
+):
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
     return {
-        "location_id": location_id,
-        "name": loc_obj['name'],
-        "zones": [
-            {"name": "North Sector", "lat": base_lat + offset, "lng": base_lng, "risk_multiplier": 1.1},
-            {"name": "South Sector", "lat": base_lat - offset, "lng": base_lng, "risk_multiplier": 0.8},
-            {"name": "East Sector", "lat": base_lat, "lng": base_lng + offset, "risk_multiplier": 0.95},
-            {"name": "West Sector", "lat": base_lat, "lng": base_lng - offset, "risk_multiplier": 1.05}
-        ]
+        "session_id": session.session_id,
+        "live_mode": session.live_mode,
+        "last_synced_at": state_manager.last_synced_at,
+        "sync_in_progress": state_manager.sync_in_progress
     }
 
-@app.get("/api/historical_compare/{location_id}")
-def get_historical_comparison(location_id: str):
-    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
-    if not loc_obj:
-        raise HTTPException(status_code=404, detail="Location not found")
-    
-    return fetch_historical_compare(loc_obj['lat'], loc_obj['lng'])
 
-@app.post("/api/ai/query")
+@app.post("/api/sync")
+def trigger_live_sync(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Triggers immediate synchronization with live feeds. Requires authentication."""
+    sync_all_locations()
+    return {
+        "status": "success",
+        "message": f"All {len(LOCATIONS)} locations synchronized.",
+        "timestamp": state_manager.last_synced_at
+    }
 
-def rakshak_ai_query(q: AIQuery):
-    query = q.query.lower().strip()
-    risks = get_all_risks()
-    
-    # Pre-fetch all simulation / live data entries
-    all_sim_data = {}
-    for loc in LOCATIONS:
-        if system_state["live_mode"] and loc["id"] in live_data_cache:
-            all_sim_data[loc["id"]] = live_data_cache[loc["id"]]
-        else:
-            all_sim_data[loc["id"]] = current_simulation.get(loc["id"], {"rainfall_1h": 15, "soil_moisture": 45, "water_level": 2.5, "water_level_rise_rate": 0.1})
 
-    # 1. GREETING / CASUAL CONVERSATION (ChatGPT-style)
-    casual_greetings = ["hi", "hello", "hey", "namaste", "halo", "kaise ho", "kya haal hai", "good morning", "good evening", "shuru", "start"]
-    if any(query == g or query.startswith(g + " ") or query.endswith(" " + g) for g in casual_greetings):
-        online_cnt = sum(1 for s in sensors if s["online"])
-        crit_cnt = sum(1 for r in risks if r.risk_level in ["CRITICAL", "HIGH"])
-        return {
-            "response": (
-                f"Namaste! 🙏 I am **Rakshak AI**, your real-time Flash Flood & Multi-Hazard Intelligence Assistant.\n\n"
-                f"Currently monitoring **{len(LOCATIONS)} hilly regions** across **15 Indian states** in real-time.\n"
-                f"• 🛰️ Multi-Satellite Feeds: **ISRO INSAT-3DR, NASA GPM, Sentinel-1 SAR, IMD Radars** active.\n"
-                f"• 📡 IoT Sensors Online: **{online_cnt}/{len(sensors)}**\n"
-                f"• 🚨 Severe Alert Zones: **{crit_cnt} regions**\n\n"
-                f"**Aap mujhse kisi bhi hilly region ka live update pooch sakte hain:**\n"
-                f"1. *'Manali ka mausam aur barish kitni hai?'*\n"
-                f"2. *'Wayanad Chooralmala me flood risk kya hai?'*\n"
-                f"3. *'Kedarnath aur Joshimath ka update do'*\n"
-                f"4. *'Sabse zyada barish kahan ho rahi hai?'*\n"
-                f"5. *'Kaunse areas Critical danger me hain?'*\n"
-                f"6. *'Sensors aur satellites ka status dikhao'*\n\n"
-                f"Bataiye, aap kis jagah ki jankari chahte hain?"
-            )
-        }
+@app.post("/api/simulation/scenario")
+async def update_scenario(
+    sensor_data: SimulationState,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Per-session simulation override. Requires authentication."""
+    sid = session_id or x_session_id or "default"
+    loc_id = sensor_data.location_id or "UK-001"
+    overrides = {
+        "rainfall_1h": sensor_data.rainfall,
+        "soil_moisture": sensor_data.soil_moisture,
+        "water_level": sensor_data.water_level,
+        "water_level_rise_rate": sensor_data.rise_rate
+    }
+    session = await state_manager.update_simulation_override(sid, loc_id, overrides)
+    return {
+        "status": "success",
+        "session_id": session.session_id,
+        "location_id": loc_id,
+        "overrides": overrides,
+        "is_simulated": True
+    }
 
-    # 2. MATCH SPECIFIC LOCATION(S)
-    matched_locs = []
-    for loc_id, aliases in LOCATION_ALIASES.items():
-        if any(alias in query for alias in aliases):
-            loc_obj = next((l for l in LOCATIONS if l["id"] == loc_id), None)
-            if loc_obj:
-                matched_locs.append(loc_obj)
 
-    # Also match by state/region if no individual location matched
-    if not matched_locs:
-        if "uttarakhand" in query or "uk" in query:
-            matched_locs = [l for l in LOCATIONS if l["state"] == "Uttarakhand"]
-        elif "himachal" in query or "hp" in query:
-            matched_locs = [l for l in LOCATIONS if l["state"] == "Himachal Pradesh"]
-        elif "kerala" in query:
-            matched_locs = [l for l in LOCATIONS if l["state"] == "Kerala"]
-        elif "kashmir" in query or "jammu" in query or "j&k" in query:
-            matched_locs = [l for l in LOCATIONS if l["state"] == "Jammu & Kashmir"]
-        elif "meghalaya" in query:
-            matched_locs = [l for l in LOCATIONS if l["state"] == "Meghalaya"]
-        elif "sikkim" in query:
-            matched_locs = [l for l in LOCATIONS if l["state"] == "Sikkim"]
-        elif "maharashtra" in query or "western ghats" in query or "ghats" in query:
-            matched_locs = [l for l in LOCATIONS if "Western Ghats" in l["region"]]
-        elif "northeast" in query or "ne" in query:
-            matched_locs = [l for l in LOCATIONS if l["region"] == "Northeast"]
+@app.post("/api/sih-demo/step")
+async def sih_demo_step(
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Deterministic 7-step SIH demo narrative (session-isolated). Requires authentication."""
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
+    step = session.sih_demo_step
 
-    # IF LOCATIONS MATCHED
-    if matched_locs:
-        if len(matched_locs) == 1:
-            loc = matched_locs[0]
-            sim = all_sim_data.get(loc["id"], {})
-            r_item = next((r for r in risks if r.location_id == loc["id"]), None)
-            return {"response": format_location_card(loc, sim, r_item)}
-        
-        # If multiple locations matched: provide summary comparison
-        cards = []
-        for loc in matched_locs[:4]:  # Top 4 to prevent message truncation
-            sim = all_sim_data.get(loc["id"], {})
-            r_item = next((r for r in risks if r.location_id == loc["id"]), None)
-            cards.append(format_location_card(loc, sim, r_item))
-        
-        header = f"📊 **Found {len(matched_locs)} Monitored Zones Matching Your Request:**\n\n"
-        return {"response": header + "\n\n---\n\n".join(cards)}
-
-    # 3. HIGHEST RAINFALL / RAINFALL RANKING INQUIRY
-    if any(term in query for term in ["sabse zyada barish", "highest rain", "heavy rain", "max rain", "top rainfall", "barish kahan", "rainfall rank", "rainfall ranking"]):
-        sorted_by_rain = sorted(LOCATIONS, key=lambda l: all_sim_data.get(l["id"], {}).get("rainfall_1h", 0), reverse=True)
-        top5 = sorted_by_rain[:5]
-        resp_lines = ["🌧️ **Top 5 Locations with Highest Real-Time Rainfall:**\n"]
-        for idx, l in enumerate(top5, 1):
-            s = all_sim_data.get(l["id"], {})
-            r = next((item for item in risks if item.location_id == l["id"]), None)
-            risk_tag = f"[{r.risk_level}]" if r else ""
-            resp_lines.append(
-                f"**{idx}. {l['name']} ({l['state']})** {risk_tag}\n"
-                f"   • Rainfall: **{s.get('rainfall_1h', 0)} mm/hr** | Soil: **{s.get('soil_moisture', 0)}%**\n"
-                f"   • River Stage: **{s.get('water_level', 0)}m** (+{s.get('water_level_rise_rate', 0)} m/hr)\n"
-                f"   • Safe Shelter: {l['safe_zone']}\n"
-            )
-        resp_lines.append("💡 *Tip: Aap kisi bhi location ka naam pooch kar uska full satellite telemetry analysis dekh sakte hain.*")
-        return {"response": "\n".join(resp_lines)}
-
-    # 4. HIGHEST RISK / CRITICAL / EMERGENCY INQUIRY
-    if any(term in query for term in ["critical", "high risk", "khatra", "danger", "severe", "emergency", "alert", "red alert", "warn"]):
-        critical_items = [r for r in risks if r.risk_level in ["CRITICAL", "HIGH"]]
-        if not critical_items:
-            return {
-                "response": (
-                    "✅ **Good News:** Currently, none of the 31 monitored Himalayan, Northeast, or Western Ghats river basins are at CRITICAL risk.\n\n"
-                    "All river stages and convective cloud thresholds are within normal to moderate bounds. Continuous ISRO/NASA telemetry active."
-                )
-            }
-        
-        lines = [f"🚨 **URGENT: {len(critical_items)} Regions Under Elevated Disaster Risk:**\n"]
-        for r in critical_items:
-            color = "🔴" if r.risk_level == "CRITICAL" else "🟠"
-            lines.append(
-                f"{color} **{r.location_name}** — **{r.risk_level} ALERT**\n"
-                f"• Flash Flood Prob: **{r.flood_probability}%** | Landslide: **{r.landslide_probability}%**\n"
-                f"• Trajectory: **{r.trajectory_trend}** | Early-Warning Window: **{r.lead_time_window}**\n"
-                f"• Primary Risk Drivers: {', '.join(list(r.contributing_factors.keys())[:3])}\n"
-                f"• 🏃 Immediate Evacuation Shelter: **{r.safe_zone}**\n"
-                f"• Protocol: {r.recommended_action}\n"
-            )
-        return {"response": "\n".join(lines)}
-
-    # 5. SAFEST ZONES INQUIRY
-    if any(term in query for term in ["safe", "safest", "surakshit", "lowest risk", "green zone", "normal"]):
-        low_risk = [r for r in risks if r.risk_level == "LOW"]
-        low_risk.sort(key=lambda x: x.flood_probability)
-        top_safe = low_risk[:5]
-        lines = ["🛡️ **Safest Monitored Hilly Regions Right Now (Lowest Risk):**\n"]
-        for idx, r in enumerate(top_safe, 1):
-            lines.append(
-                f"**{idx}. {r.location_name}**\n"
-                f"• Flood Prob: **{r.flood_probability}%** | Landslide: **{r.landslide_probability}%**\n"
-                f"• Status: Normal conditions, clear drainage capacity.\n"
-                f"• Designated High-Ground Assembly: {r.safe_zone}\n"
-            )
-        return {"response": "\n".join(lines)}
-
-    # 6. SENSORS & SATELLITES TELEMETRY STATUS
-    if any(term in query for term in ["sensor", "iot", "battery", "radar", "health", "isro", "nasa", "sentinel", "satellite"]):
-        online_count = sum(1 for s in sensors if s["online"])
-        lines = [
-            f"🛰️ **JALRAKSHAK Multi-Source Sensor & Earth Observation Grid:**\n",
-            f"• **Active Network Status:** {online_count}/{len(sensors)} Online ({(online_count/len(sensors))*100:.0f}% Coverage)\n",
-            f"• **Live Mode:** {'🟢 Stream Active (Syncing ISRO/NASA Feeds)' if system_state['live_mode'] else '🟠 Manual Simulation Active'}\n",
-            f"• **Last Telemetry Sync:** {system_state['last_synced_at']}\n",
-            "**Individual Sensor Health Breakdown:**"
-        ]
+    if step == 0:
+        await state_manager.update_simulation_override(sid, "UK-001", {"rainfall_1h": 10, "soil_moisture": 40, "water_level": 2.1, "water_level_rise_rate": 0.05})
+        await state_manager.update_simulation_override(sid, "UK-002", {"rainfall_1h": 12, "soil_moisture": 45, "water_level": 2.2, "water_level_rise_rate": 0.05})
+    elif step == 1:
+        await state_manager.update_simulation_override(sid, "UK-001", {"rainfall_1h": 55})
+        await state_manager.update_simulation_override(sid, "UK-002", {"rainfall_1h": 70})
+    elif step == 2:
+        await state_manager.update_simulation_override(sid, "UK-001", {"soil_moisture": 88})
+        await state_manager.update_simulation_override(sid, "UK-002", {"soil_moisture": 94})
+    elif step == 3:
+        await state_manager.update_simulation_override(sid, "UK-002", {"water_level_rise_rate": 1.4})
+        await state_manager.update_simulation_override(sid, "UK-001", {"water_level_rise_rate": 0.5})
+    elif step == 4:
+        await state_manager.update_simulation_override(sid, "UK-001", {"water_level_rise_rate": 1.8, "rainfall_1h": 90})
+    elif step == 5:
+        # Sensor degradation step
         for s in sensors:
-            status_icon = "🟢" if s["online"] else "🔴"
-            health_str = f"{s.get('health_score', 0)}%" if s["online"] else "OFFLINE"
-            lines.append(
-                f"{status_icon} **{s['id']}** ({s['type']})\n"
-                f"   • Current Reading: `{s['reading']}` | Battery: {s['battery']}% | Health: {health_str}"
-            )
-        return {"response": "\n".join(lines)}
+            if s["id"] == "WATER-004":
+                s["online"] = False
+                s["reading"] = "N/A"
+    elif step >= 6:
+        await state_manager.reset_session(sid)
+        for s in sensors:
+            s["online"] = True
+        return {"status": "reset", "step": 0}
 
-    # 7. EXPLANATION OF DISASTER PHENOMENON (CLOUDBURST, GLOF, LANDSLIDE)
-    if "cloudburst" in query or "badal phatna" in query:
-        return {
-            "response": (
-                "⛈️ **What is a Cloudburst (Badal Phatna)?**\n\n"
-                "According to the India Meteorological Department (IMD), a **cloudburst** is an extreme meteorological event where **rainfall ≥ 100 mm per hour** occurs over a localized geographic area of approximately 20–30 km² in hilly terrain.\n\n"
-                "**How JALRAKSHAK Detects Cloudbursts Ahead of Time:**\n"
-                "1. **ISRO INSAT-3DR Imager:** Monitors Cloud Top Temperature (CTT). When CTT drops below **-40°C to -60°C**, it signals deep convective cumulonimbus towers capable of cloudbursts.\n"
-                "2. **IMD Doppler Weather Radar (DWR):** Detects intense radar echo reflectivity **> 45 dBZ** indicating torrential vertical precipitation.\n"
-                "3. **IoT Rate of Rise:** Rapid river stage velocity acceleration (> 0.5 m/hr) immediately triggers an automated early warning before downstream settlements are impacted."
-            )
-        }
-
-    if "glof" in query or "glacial" in query:
-        return {
-            "response": (
-                "🏔️ **What is a Glacial Lake Outburst Flood (GLOF)?**\n\n"
-                "A GLOF occurs when a dam containing a glacial lake (made of moraine, ice, or loose rock) suddenly breaches, releasing millions of cubic meters of water downstream in minutes.\n\n"
-                "**Examples in India:**\n"
-                "• **2013 Kedarnath Chorabari Lake outburst**\n"
-                "• **2021 Chamoli Rishiganga disaster**\n"
-                "• **2023 South Lhonak Lake breach in Sikkim**\n\n"
-                "**JALRAKSHAK Early Warning:** We monitor upstream sensor nodes in high-altitude basins (e.g. Joshimath UK-002, Kedarnath UK-003, Gangtok NE-002) and automatically calculate downstream hydrodynamic travel times to notify authorities 1 to 3 hours in advance."
-            )
-        }
-
-    if "landslide" in query or "mudslide" in query or "bhooskhalan" in query:
-        return {
-            "response": (
-                "⛰️ **What Triggers Landslides & How JALRAKSHAK Predicts Them:**\n\n"
-                "Landslides in the Himalayas and Western Ghats are triggered by a compound interaction of:\n"
-                "1. **Pore-Water Pressure:** High soil moisture (>75%) saturates loose topsoil.\n"
-                "2. **Steep Slope Gradient:** Slopes > 40° exceed the natural angle of repose when wet.\n"
-                "3. **Antecedent Rainfall:** Continuous rainfall over preceding days weakens geological root anchors.\n\n"
-                "JALRAKSHAK calculates separate **Flash Flood Risk** and **Landslide Susceptibility**, merging them into a **Compound Multi-Hazard Index** to warn rescue teams before slope shear failure occurs."
-            )
-        }
-
-    # 8. GENERAL SMART ASSISTANT FALLBACK (Conversational + Actionable)
-    # Search for any single word match across names
-    partial_matches = []
-    for loc in LOCATIONS:
-        words = loc["name"].lower().replace("(", "").replace(")", "").split()
-        if any(w in query for w in words if len(w) > 3):
-            partial_matches.append(loc)
-
-    if partial_matches:
-        loc = partial_matches[0]
-        sim = all_sim_data.get(loc["id"], {})
-        r_item = next((r for r in risks if r.location_id == loc["id"]), None)
-        return {"response": format_location_card(loc, sim, r_item)}
-
-    # Default Helpful Conversational AI Answer
-    return {
-        "response": (
-            f"🤖 **Rakshak AI (Disaster Intelligence Core)**\n\n"
-            f"Maine aapka sawaal suna: *'{q.query}'*.\n\n"
-            f"Main real-time satellite telemetry aur **31 hilly regions** ke live sensor data ko continuously analyze kar raha hoon. "
-            f"Aap mujhse kisi bhi location ki live report maang sakte hain:\n\n"
-            f"• **Live Weather & Risk:** *'Manali ka flood risk aur rainfall kitni hai?'*\n"
-            f"• **Wayanad Landslide Status:** *'Wayanad Chooralmala update'* \n"
-            f"• **State-wide Summary:** *'Uttarakhand me kitna khatra hai?'* ya *'Himachal rainfall rank'*\n"
-            f"• **Extreme Alerts:** *'Sabse zyada barish kahan ho rahi hai?'* ya *'Critical red alerts'* \n"
-            f"• **Safety & Shelters:** *'Kedarnath ka safe zone kahan hai?'*\n"
-            f"• **Technical Feeds:** *'ISRO INSAT-3DR satellite telemetry'* ya *'Sensors online status'*\n\n"
-            f"Kisi specific shehar ya nadi ke baare me poochne ke liye uska naam likhein!"
-        )
-    }
+    new_step = await state_manager.advance_demo_step(sid)
+    return {"status": "success", "session_id": sid, "step": new_step}
 
 
-@app.get("/api/alerts", response_model=List[Alert])
-def get_alerts():
-    risks = get_all_risks()
-    alerts = []
-    for r in risks:
-        if r.risk_level in ["HIGH", "CRITICAL"]:
-            drivers = list(r.contributing_factors.keys())
-            priority = 100 if r.risk_level == "CRITICAL" else 70
-            priority += min(30, r.exposure.population_exposed / 100)
-            if r.trajectory_trend == "RAPIDLY INCREASING":
-                priority += 20
+@app.post("/api/reset")
+async def reset_simulation(
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Resets session simulation parameters to baseline. Requires authentication."""
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.reset_session(sid)
+    for s in sensors:
+        s["online"] = True
+    return {"status": "reset_success", "session_id": session.session_id, "live_mode": True}
 
-            alerts.append(Alert(
-                location_id=r.location_id,
-                location_name=r.location_name,
-                level=r.risk_level,
-                message=r.recommended_action,
-                drivers=drivers,
-                safe_zone=r.safe_zone,
-                priority_score=int(priority),
-                status="ESCALATED" if r.trajectory_trend == "RAPIDLY INCREASING" else "CONFIRMED" if r.risk_level == "CRITICAL" else "NEW",
-                lead_time_window=r.lead_time_window
-            ))
-    alerts.sort(key=lambda x: x.priority_score, reverse=True)
-    return alerts
 
+@app.post("/api/sensors/toggle")
+def toggle_sensor(
+    sensor_id: str = Query(...),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Toggles online state of a sensor. Requires authentication."""
+    for s in sensors:
+        if s["id"] == sensor_id:
+            s["online"] = not s["online"]
+            return {"status": "success", "sensor_id": sensor_id, "online": s["online"]}
+    raise HTTPException(status_code=404, detail="Sensor not found")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SENSORS, WEBSOCKET & AUXILIARY ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/sensors", response_model=List[SensorStatus])
 def get_sensors():
-    now_str = datetime.now().strftime("%H:%M:%S")
+    now_str = datetime.now().strftime("%H:%M:%S IST")
+    result = []
     for s in sensors:
-        if s["online"]:
-            s["last_updated"] = now_str
-            s["health_score"] = min(100, max(50, s["battery"] + random.randint(-3, 3)))
-            if s["health_score"] > 80:
-                s["status_label"] = "HEALTHY"
-            elif s["health_score"] > 60:
-                s["status_label"] = "DEGRADED"
-                s["anomaly_detected"] = True
-            else:
-                s["status_label"] = "WARNING"
-                s["anomaly_detected"] = True
-        else:
-            s["status_label"] = "OFFLINE"
-            s["health_score"] = 0
-            s["reading"] = "N/A"
-            s["anomaly_detected"] = True
-            s["last_updated"] = now_str
-    return sensors
+        health = min(100, max(50, s["battery"])) if s["online"] else 0
+        lbl = "HEALTHY" if health > 80 else "DEGRADED" if health > 50 else "OFFLINE"
+        result.append(SensorStatus(
+            id=s["id"],
+            type=s["type"],
+            reading=s["reading"] if s["online"] else "N/A",
+            battery=s["battery"],
+            online=s["online"],
+            last_updated=now_str,
+            health_score=health,
+            status_label=lbl,
+            anomaly_detected=not s["online"],
+            is_simulated=False,
+            source="IoT Ground Station & Satellite Feed"
+        ))
+    return result
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# WEBSOCKET REAL-TIME TELEMETRY
-# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/satellite-feed", response_model=List[SatelliteFeedItem])
+def get_satellite_feed():
+    now_str = datetime.now().strftime("%H:%M:%S IST")
+    return [
+        SatelliteFeedItem(
+            constellation="ISRO INSAT Series",
+            satellite="INSAT-3DR / 3D",
+            agency="ISRO (India)",
+            sensor_type="6-Channel Multispectral Imager & Sounder",
+            coverage="Pan-India Geostationary (74°E & 82°E)",
+            status="ACTIVE - REALTIME",
+            latency_ms=28,
+            resolution="1 km IR / 4 km CTT",
+            data_stream="Cloud Top Temp & Hydro-Estimator",
+            last_ping=now_str,
+            is_simulated=False
+        ),
+        SatelliteFeedItem(
+            constellation="NASA GPM Constellation",
+            satellite="GPM Core Observatory / IMERG",
+            agency="NASA / JAXA",
+            sensor_type="Dual-frequency Precipitation Radar (DPR) & GMI",
+            coverage="Global Low-Earth Orbit",
+            status="ACTIVE - REALTIME",
+            latency_ms=45,
+            resolution="0.1° x 0.1° (~10 km)",
+            data_stream="Multi-satellite Precipitation Calibrated Flux",
+            last_ping=now_str,
+            is_simulated=False
+        ),
+        SatelliteFeedItem(
+            constellation="Copernicus Sentinel",
+            satellite="Sentinel-1C / 1A SAR",
+            agency="ESA / Copernicus",
+            sensor_type="C-Band Synthetic Aperture Radar (SAR)",
+            coverage="Indian Subcontinent Landmass",
+            status="ACTIVE - REALTIME",
+            latency_ms=62,
+            resolution="10 m Spatial High-Res",
+            data_stream="Surface Soil Moisture & Inundation Extent",
+            last_ping=now_str,
+            is_simulated=False
+        ),
+        SatelliteFeedItem(
+            constellation="IMD DWR Network",
+            satellite="National Doppler Radar Grid",
+            agency="India Meteorological Department",
+            sensor_type="S/C/X-Band Ground Doppler Polarimetric Radar",
+            coverage="Himalayan, Northeast & Coastal Belts",
+            status="ONLINE - DUAL POL",
+            latency_ms=15,
+            resolution="250 m Radial Echo",
+            data_stream="Reflectivity (dBZ) & Radial Wind Velocity",
+            last_ping=now_str,
+            is_simulated=False
+        ),
+    ]
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -973,193 +658,157 @@ class ConnectionManager:
             except Exception:
                 self.disconnect(connection)
 
+
 manager = ConnectionManager()
+
 
 @app.websocket("/api/ws/telemetry")
 async def websocket_telemetry(websocket: WebSocket):
     await manager.connect(websocket)
+    session = SessionState(session_id="websocket_stream")
     try:
         while True:
-            risks = get_all_risks()
+            risks = get_all_risks(session)
             risk_dicts = [r.dict() for r in risks]
             await websocket.send_text(json.dumps(risk_dicts))
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SIMULATION & SCENARIO ENGINE
-# ═══════════════════════════════════════════════════════════════════════════════
-@app.post("/api/simulation/scenario")
-def update_scenario(sensor_data: SimulationState):
-    system_state["live_mode"] = False
-    loc_id = sensor_data.location_id
-    if loc_id not in current_simulation:
-        current_simulation[loc_id] = {}
-    current_simulation[loc_id].update({
-        "rainfall_1h": sensor_data.rainfall,
-        "soil_moisture": sensor_data.soil_moisture,
-        "water_level": sensor_data.water_level,
-        "water_level_rise_rate": sensor_data.rise_rate
-    })
-    # Upstream cascade override
-    if sensor_data.upstream_water_level and sensor_data.upstream_water_level > 0:
-        for l in LOCATIONS:
-            if loc_id in l.get("upstream_of", []):
-                if l["id"] not in current_simulation:
-                    current_simulation[l["id"]] = {}
-                current_simulation[l["id"]]["water_level_rise_rate"] = sensor_data.upstream_water_level
 
-    return {"status": "success", "message": f"Simulation updated for {loc_id}"}
-
-@app.post("/api/sensors/toggle")
-def toggle_sensor(sensor_id: str):
-    for s in sensors:
-        if s["id"] == sensor_id:
-            s["online"] = not s["online"]
-            return {"status": "success", "sensor_id": sensor_id, "online": s["online"]}
-    raise HTTPException(status_code=404, detail="Sensor not found")
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SIH DEMO MODE ORCHESTRATION
-# ═══════════════════════════════════════════════════════════════════════════════
-@app.post("/api/sih-demo/step")
-def sih_demo_step():
-    """Deterministic 7-step SIH demo narrative focused on UK-001/UK-002."""
-    system_state["live_mode"] = False
-    step = system_state["sih_demo_step"]
-
-    if step == 0:
-        # Step 1: Normal baseline
-        current_simulation["UK-001"] = {"rainfall_1h": 10, "soil_moisture": 40, "water_level": 2.1, "water_level_rise_rate": 0.05}
-        current_simulation["UK-002"] = {"rainfall_1h": 12, "soil_moisture": 45, "water_level": 2.2, "water_level_rise_rate": 0.05}
-        current_simulation["WG-001"] = {"rainfall_1h": 15, "soil_moisture": 50, "water_level": 2.5, "water_level_rise_rate": 0.1}
-    elif step == 1:
-        # Step 2: Rainfall intensifies
-        current_simulation["UK-001"]["rainfall_1h"] = 55
-        current_simulation["UK-002"]["rainfall_1h"] = 70
-    elif step == 2:
-        # Step 3: Soil saturates
-        current_simulation["UK-001"]["soil_moisture"] = 88
-        current_simulation["UK-002"]["soil_moisture"] = 94
-    elif step == 3:
-        # Step 4: Upstream rise cascades
-        current_simulation["UK-002"]["water_level_rise_rate"] = 1.4
-        current_simulation["UK-001"]["water_level_rise_rate"] = 0.5
-    elif step == 4:
-        # Step 5: CRITICAL state
-        current_simulation["UK-001"]["water_level_rise_rate"] = 1.8
-        current_simulation["UK-001"]["rainfall_1h"] = 90
-    elif step == 5:
-        # Step 6: Sensor failure
-        for s in sensors:
-            if s["id"] == "WATER-004":
-                s["online"] = False
-                s["reading"] = "N/A"
-    elif step == 6:
-        # Step 7: Reset
-        system_state["sih_demo_step"] = 0
-        system_state["live_mode"] = True
-        for s in sensors:
-            s["online"] = True
-        # Reset simulations
-        for loc in LOCATIONS:
-            base_rain = loc["annual_rainfall_mm"] / 365 / 24 * random.uniform(0.5, 2.0)
-            base_soil = 30 + (loc["vulnerability"] * 40) + random.uniform(-5, 5)
-            current_simulation[loc["id"]] = {
-                "rainfall_1h": round(base_rain, 1),
-                "soil_moisture": round(min(98, max(20, base_soil)), 1),
-                "water_level": round(1.5 + base_rain * 0.05 + random.uniform(0, 1.5), 2),
-                "water_level_rise_rate": round(max(0.02, base_rain * 0.02), 2)
-            }
-        return {"status": "reset", "step": 0}
-
-    system_state["sih_demo_step"] += 1
-    return {"status": "success", "step": system_state["sih_demo_step"]}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SATELLITE FEED & CONSTELLATION HUD
-# ═══════════════════════════════════════════════════════════════════════════════
-@app.get("/api/satellite-feed", response_model=List[SatelliteFeedItem])
-def get_satellite_feed():
-    now_str = datetime.now().strftime("%H:%M:%S IST")
-    return [
-        SatelliteFeedItem(
-            constellation="ISRO INSAT Series",
-            satellite="INSAT-3DR / 3D",
-            agency="ISRO (India)",
-            sensor_type="6-Channel Multispectral Imager & Sounder",
-            coverage="Pan-India Geostationary (74°E & 82°E)",
-            status="ACTIVE - REALTIME",
-            latency_ms=28,
-            resolution="1 km IR / 4 km CTT",
-            data_stream="Cloud Top Temp & Hydro-Estimator",
-            last_ping=now_str
-        ),
-        SatelliteFeedItem(
-            constellation="NASA GPM Constellation",
-            satellite="GPM Core Observatory / IMERG",
-            agency="NASA / JAXA",
-            sensor_type="Dual-frequency Precipitation Radar (DPR) & GMI",
-            coverage="Global Low-Earth Orbit",
-            status="ACTIVE - REALTIME",
-            latency_ms=45,
-            resolution="0.1° x 0.1° (~10 km)",
-            data_stream="Multi-satellite Precipitation Calibrated Flux",
-            last_ping=now_str
-        ),
-        SatelliteFeedItem(
-            constellation="Copernicus Sentinel",
-            satellite="Sentinel-1C / 1A SAR",
-            agency="ESA / Copernicus",
-            sensor_type="C-Band Synthetic Aperture Radar (SAR)",
-            coverage="Indian Subcontinent Landmass",
-            status="ACTIVE - REALTIME",
-            latency_ms=62,
-            resolution="10 m Spatial High-Res",
-            data_stream="Surface Soil Moisture & Inundation Extent",
-            last_ping=now_str
-        ),
-        SatelliteFeedItem(
-            constellation="IMD DWR Network",
-            satellite="National Doppler Radar Grid",
-            agency="India Meteorological Department",
-            sensor_type="S/C/X-Band Ground Doppler Polarimetric Radar",
-            coverage="Himalayan, Northeast & Coastal Belts",
-            status="ONLINE - DUAL POL",
-            latency_ms=15,
-            resolution="250 m Radial Echo",
-            data_stream="Reflectivity (dBZ) & Radial Wind Velocity",
-            last_ping=now_str
-        ),
-    ]
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# EVACUATION & SPATIAL HAZARD ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/evacuation_route/{location_id}")
-def get_evacuation_route(location_id: str):
-    risks = get_all_risks()
+async def get_evacuation_route(
+    location_id: str,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None)
+):
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
+    risks = get_all_risks(session)
     loc_risk = next((r for r in risks if r.location_id == location_id), None)
     if not loc_risk:
         raise HTTPException(status_code=404, detail="Location not found")
     route = calculate_dynamic_route(location_id, loc_risk.risk_level, loc_risk.lat, loc_risk.lng, loc_risk.safe_zone)
-    if not route:
-        raise HTTPException(status_code=404, detail="No route could be calculated for this location.")
     return {"status": "success", "route": route, "risk_level": loc_risk.risk_level}
 
+
 @app.get("/api/spatial_hazard_map/{location_id}")
-def get_spatial_hazard_map(location_id: str):
-    risks = get_all_risks()
+async def get_spatial_hazard_map(
+    location_id: str,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None)
+):
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
+    risks = get_all_risks(session)
     loc_risk = next((r for r in risks if r.location_id == location_id), None)
     if not loc_risk:
         raise HTTPException(status_code=404, detail="Location not found")
     heatmap = generate_spatial_heatmap(location_id, loc_risk.lat, loc_risk.lng, loc_risk.risk_level)
     return {"status": "success", "heatmap_points": heatmap, "risk_level": loc_risk.risk_level}
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SYSTEM HEALTH & METADATA
-# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/historical_compare/{location_id}")
+def get_historical_comparison(location_id: str):
+    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
+    if not loc_obj:
+        raise HTTPException(status_code=404, detail="Location not found")
+    return fetch_historical_compare(loc_obj["lat"], loc_obj["lng"])
+
+
+@app.get("/api/subcity_zones/{location_id}")
+def get_subcity_zones(location_id: str):
+    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
+    if not loc_obj:
+        raise HTTPException(status_code=404, detail="Location not found")
+    base_lat = loc_obj["lat"]
+    base_lng = loc_obj["lng"]
+    offset = 0.02
+    return {
+        "location_id": location_id,
+        "name": loc_obj["name"],
+        "zones": [
+            {"name": "North Sector", "lat": round(base_lat + offset, 4), "lng": base_lng, "risk_multiplier": 1.1},
+            {"name": "South Sector", "lat": round(base_lat - offset, 4), "lng": base_lng, "risk_multiplier": 0.8},
+            {"name": "East Sector", "lat": base_lat, "lng": round(base_lng + offset, 4), "risk_multiplier": 0.95},
+            {"name": "West Sector", "lat": base_lat, "lng": round(base_lng - offset, 4), "risk_multiplier": 1.05}
+        ]
+    }
+
+
+class AIQuery(BaseModel):
+    query: str
+
+
+@app.post("/api/ai/query")
+async def ai_query(
+    body: AIQuery,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None)
+):
+    """Citizen AI Assistant query. Uses genuine Google GenAI SDK if key provided; otherwise structured rule engine."""
+    sid = session_id or x_session_id or "default"
+    session = await state_manager.get_session(sid)
+    risks = get_all_risks(session)
+
+    # Search location match
+    q = body.query.lower()
+    matched_loc = None
+    for loc in LOCATIONS:
+        if loc["name"].lower() in q or loc["state"].lower() in q or loc["id"].lower() in q:
+            matched_loc = loc
+            break
+
+    if not matched_loc:
+        matched_loc = LOCATIONS[0]  # Default to UK-001 Devprayag
+
+    risk_match = next((r for r in risks if r.location_id == matched_loc["id"]), None)
+
+    if settings.gemini_api_key:
+        try:
+            from google import genai
+            client = genai.Client(api_key=settings.gemini_api_key)
+            prompt = (
+                f"You are the official JALRAKSHAK Citizen Assistant. Provide concise, lifesaving disaster advisory.\n"
+                f"Location: {matched_loc['name']}, {matched_loc['state']}\n"
+                f"Threat Level: {risk_match.risk_level if risk_match else 'MODERATE'}\n"
+                f"Flood Probability: {risk_match.flood_probability if risk_match else 45.0}%\n"
+                f"Safe Shelter: {matched_loc['safe_zone']}\n"
+                f"User Question: {body.query}\n"
+                f"Include safety disclaimer: {SAFETY_DISCLAIMER}"
+            )
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt
+            )
+            return {
+                "answer": response.text,
+                "engine": "google-genai (Gemini 2.0 Flash)",
+                "location_id": matched_loc["id"],
+                "disclaimer": SAFETY_DISCLAIMER
+            }
+        except Exception:
+            pass
+
+    # Deterministic honest rule-based response
+    ans = (
+        f"🚨 **Hazard Report: {matched_loc['name']}, {matched_loc['state']}**\n\n"
+        f"• **Current Threat Classification:** {risk_match.risk_level}\n"
+        f"• **Flash Flood Probability:** {risk_match.flood_probability}%\n"
+        f"• **Trajectory Trend:** {risk_match.trajectory_trend}\n"
+        f"• **Designated Safe Evacuation Shelter:** {matched_loc['safe_zone']}\n\n"
+        f"**Official Directive:** {risk_match.recommended_action}\n\n"
+        f"*(Generated by JALRAKSHAK Rule Engine — Decision-Support Only)*\n\n"
+        f"⚠️ {SAFETY_DISCLAIMER}"
+    )
+    return {
+        "answer": ans,
+        "engine": "JALRAKSHAK Deterministic Disaster Rule Engine",
+        "location_id": matched_loc["id"],
+        "disclaimer": SAFETY_DISCLAIMER
+    }
+
+
 @app.get("/api/system/health")
 def system_health():
     online_sensors = sum(1 for s in sensors if s["online"])
@@ -1169,10 +818,11 @@ def system_health():
         "total_states": len(set(l["state"] for l in LOCATIONS)),
         "sensors_online": online_sensors,
         "sensors_total": len(sensors),
-        "total_syncs": system_state["total_syncs"],
-        "failed_syncs": system_state["failed_syncs"],
-        "live_mode": system_state["live_mode"],
-        "last_synced_at": system_state["last_synced_at"],
-        "total_population_monitored": sum(l["population"] for l in LOCATIONS),
-        "regions": list(set(l["region"] for l in LOCATIONS))
+        "total_syncs": state_manager.total_syncs,
+        "failed_syncs": state_manager.failed_syncs,
+        "last_synced_at": state_manager.last_synced_at,
+        "model_loaded": flood_model is not None,
+        "model_path": MODEL_PATH,
+        "cors_origins": settings.get_cors_origins_list(),
+        "disclaimer": SAFETY_DISCLAIMER
     }

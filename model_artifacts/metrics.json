@@ -1,6 +1,7 @@
 {
-  "model_type": "Random Forest",
-  "dataset_size": 10000,
+  "model_name": "Jalrakshak Calibrated Multi-Class Hydrological Ensemble",
+  "model_type": "CalibratedClassifierCV(RandomForestClassifier, method='sigmoid')",
+  "dataset_size": 12000,
   "features": [
     "rainfall_1h",
     "rainfall_24h",
@@ -10,18 +11,50 @@
     "slope_degree",
     "hist_vulnerability"
   ],
-  "accuracy": 0.94,
-  "precision": 0.946,
-  "recall": 0.94,
-  "f1_score": 0.941,
-  "roc_auc": 0.94,
-  "feature_importance": {
-    "rainfall_1h": 0.189,
-    "rainfall_24h": 0.024,
-    "soil_moisture": 0.293,
-    "water_level": 0.023,
-    "water_level_rise_rate": 0.396,
-    "slope_degree": 0.028,
-    "hist_vulnerability": 0.048
-  }
+  "feature_importances": {
+    "rainfall_1h": 0.2876,
+    "rainfall_24h": 0.2294,
+    "soil_moisture": 0.0843,
+    "water_level": 0.1074,
+    "water_level_rise_rate": 0.2912,
+    "slope_degree": 0.0001,
+    "hist_vulnerability": 0.0001
+  },
+  "metrics": {
+    "accuracy": 1.0,
+    "macro_precision": 1.0,
+    "macro_recall": 1.0,
+    "macro_f1": 1.0,
+    "pr_auc_warning_threshold": 1.0,
+    "brier_calibration_loss": 0.0,
+    "confusion_matrix": [
+      [
+        1666,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        403,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        227,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        104
+      ]
+    ]
+  },
+  "calibration": "Sigmoid (Platt Scaling) via 3-Fold Stratified CV",
+  "trained_at_utc": "2026-11-13T13:28:43.532924+00:00",
+  "safety_disclaimer": "Decision support only. Predictions require human confirmation before dispatch."
 }
