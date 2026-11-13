@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+
+# Builds & Caches
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.log
+
+# Large / generated Model Artifacts (joblib models)
+model_artifacts/*.joblib
+
+# Symlinks & catalogues
+public-apis
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
