@@ -47,11 +47,31 @@ button:active, a:active {
   transform: translateY(1px);
 }
 
+.num, [data-tabular-nums] {
+  font-family: var(--font-outlier);
+  font-variant-numeric: tabular-nums;
+}
+
+.badge-simulated {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 4px,
+    var(--color-rule-2) 4px,
+    var(--color-rule-2) 6px
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    TACTICAL MAP TILES & ATTRIBUTION STYLING
    ═══════════════════════════════════════════════════════════════════ */
-.dark-map .leaflet-tile-pane {
+[data-theme="dark"] .dark-map .leaflet-tile-pane,
+:root:not([data-theme="light"]) .dark-map .leaflet-tile-pane {
   filter: brightness(0.6) invert(1) contrast(2.5) hue-rotate(200deg) saturate(0.25) brightness(0.75);
+}
+
+[data-theme="light"] .dark-map .leaflet-tile-pane {
+  filter: saturate(0.35) contrast(1.1) brightness(0.98);
 }
 
 .dark-map .leaflet-marker-pane,

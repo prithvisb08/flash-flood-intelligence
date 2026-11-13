@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import {
-  AlertTriangle,
   Activity,
   ArrowLeft,
   Layers,
@@ -11,17 +10,27 @@ import {
   PlayCircle,
   Users,
   TrendingUp,
-  Cpu,
+  TrendingDown,
+  Minus,
   FileCode2,
   FileText,
   Lock,
   Unlock,
   ShieldAlert,
-  Info,
   X,
-  Radio,
+  Search,
+  SlidersHorizontal,
 } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+} from 'recharts';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
 
@@ -31,27 +40,39 @@ import MapWrapper from '../components/MapWrapper';
 import { MapDigitalTwin } from '../components/MapDigitalTwin';
 import RakshakAI from '../components/RakshakAI';
 import SatelliteFeed from '../components/SatelliteFeed';
+import {
+  RiskBadge,
+  SourceTag,
+  StatCard,
+  AlertBanner,
+  type AlertItem,
+  DisclaimerBar,
+  ThemeToggle,
+  EmptyState,
+} from '../components/ui';
 import { API_BASE_URL, WS_BASE_URL } from '../config';
 import { type PredictionResult, PredictionResultSchema } from '../schemas';
 
 interface TooltipProps {
   active?: boolean;
   payload?: Array<{ value: number }>;
+  label?: string;
 }
 
-function CustomTrajectoryTooltip({ active, payload }: TooltipProps) {
+function CustomTrajectoryTooltip({ active, payload, label }: TooltipProps) {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-paper-2 border border-rule px-2.5 py-1 rounded text-xs text-ink">
-        <span className="text-accent font-medium num">{payload[0].value}% probability</span>
+      <div className="bg-paper-2 border border-rule px-2.5 py-1.5 rounded text-xs text-ink shadow-sm">
+        <div className="text-muted text-xs mb-0.5">{label}</div>
+        <div className="text-accent font-medium num">{payload[0].value}% probability</div>
       </div>
     );
   }
   return null;
 }
 
-const FILTERS = [
-  { id: 'ALL', label: 'All basins' },
+const REGION_FILTERS = [
+  { id: 'ALL', label: 'All catchments' },
   { id: 'CRITICAL', label: 'Critical / High' },
   { id: 'HIMALAYAS', label: 'Himalayas' },
   { id: 'KASHMIR', label: 'Kashmir' },
@@ -59,15 +80,20 @@ const FILTERS = [
   { id: 'GHATS', label: 'Western Ghats' },
 ] as const;
 
-type FilterType = (typeof FILTERS)[number]['id'];
+type RegionFilter = (typeof REGION_FILTERS)[number]['id'];
 
 export default function AdminDashboard() {
   const [riskData, setRiskData] = useState<PredictionResult[]>([]);
-  const [activeFilter, setActiveFilter] = useState<FilterType>('ALL');
+  const [activeRegion, setActiveRegion] = useState<RegionFilter>('ALL');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [demoStep, setDemoStep] = useState<number>(0);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [selectedLocation, setSelectedLocation] = useState<PredictionResult | null>(null);
+  const [activeTab, setActiveTab] = useState<'map' | 'list' | 'intel'>('map');
+
+  // Search input ref for keyboard shortcut "/"
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Operator Auth & CAP Alert Dispatching State
   const [authToken, setAuthToken] = useState<string>('');
@@ -78,17 +104,21 @@ export default function AdminDashboard() {
   const [loginError, setLoginError] = useState<string>('');
   const [dispatchStatus, setDispatchStatus] = useState<string>('');
 
-  const handleOpenDigitalTwin = (loc: PredictionResult) => {
-    setSelectedLocation(loc);
-    setTimeout(() => {
-      const el = document.getElementById('digital-twin-section');
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } else {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+  // Keyboard shortcut listener: "/" focuses search, "Escape" closes modal/drawer
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
       }
-    }, 80);
-  };
+      if (e.key === 'Escape') {
+        if (isAuthModalOpen) setIsAuthModalOpen(false);
+        else if (selectedLocation) setSelectedLocation(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAuthModalOpen, selectedLocation]);
 
   const fetchInitialData = async () => {
     try {
@@ -96,6 +126,9 @@ export default function AdminDashboard() {
       const parsed = z.array(PredictionResultSchema).safeParse(res.data);
       if (parsed.success) {
         setRiskData(parsed.data);
+        if (!selectedLocation && parsed.data.length > 0) {
+          setSelectedLocation(parsed.data[0]);
+        }
         setLastSyncTime(
           new Date().toLocaleTimeString('en-IN', {
             hour: '2-digit',
@@ -170,7 +203,7 @@ export default function AdminDashboard() {
       setAuthUsername(loginUser);
       setIsAuthModalOpen(false);
     } catch (err) {
-      setLoginError('Invalid operator credentials. Please retry.');
+      setLoginError('Invalid credentials. Please retry.');
       console.error(err);
     }
   };
@@ -189,236 +222,236 @@ export default function AdminDashboard() {
           headers: { Authorization: `Bearer ${authToken}` },
         }
       );
-      setDispatchStatus(`Alert successfully broadcast to response network for ${locId}.`);
+      setDispatchStatus(`CAP 1.2 alert dispatched to response network for ${locId}.`);
       setTimeout(() => setDispatchStatus(''), 4000);
     } catch (err) {
-      setDispatchStatus('Dispatch failed. Ensure valid operator authorization.');
+      setDispatchStatus('Dispatch failed. Please check operator authorization.');
       setTimeout(() => setDispatchStatus(''), 4000);
     }
   };
 
-  const criticalLocations = riskData.filter(
-    (d) => d.risk_level === 'CRITICAL' || d.risk_level === 'HIGH'
-  );
+  // Convert critical/high risk locations to AlertItems for AlertBanner
+  const alertItems: AlertItem[] = riskData
+    .filter((loc) => loc.risk_level === 'CRITICAL' || loc.risk_level === 'HIGH')
+    .map((loc) => ({
+      id: loc.location_id,
+      locationId: loc.location_id,
+      locationName: loc.location_name,
+      riskLevel: loc.risk_level,
+      headline: `${loc.flood_probability}% flood surge probability. Directive: ${loc.recommended_action}`,
+      issuedAt: lastSyncTime ? `Telemetry ${lastSyncTime}` : 'Active alert',
+    }));
 
+  // Filtering locations by region tab and search query
   const filteredLocations = riskData.filter((loc) => {
-    if (activeFilter === 'CRITICAL') {
-      return loc.risk_level === 'CRITICAL' || loc.risk_level === 'HIGH';
-    }
-    if (activeFilter === 'HIMALAYAS') {
-      return loc.location_id.startsWith('UK-') || loc.location_id.startsWith('HP-');
-    }
-    if (activeFilter === 'KASHMIR') {
-      return loc.location_id.startsWith('JK-');
-    }
-    if (activeFilter === 'NORTHEAST') {
-      return loc.location_id.startsWith('NE-');
-    }
-    if (activeFilter === 'GHATS') {
-      return loc.location_id.startsWith('WG-');
-    }
-    return true;
+    const matchesRegion =
+      activeRegion === 'ALL'
+        ? true
+        : activeRegion === 'CRITICAL'
+        ? loc.risk_level === 'CRITICAL' || loc.risk_level === 'HIGH'
+        : activeRegion === 'HIMALAYAS'
+        ? loc.location_id.startsWith('UK-') || loc.location_id.startsWith('HP-')
+        : activeRegion === 'KASHMIR'
+        ? loc.location_id.startsWith('JK-')
+        : activeRegion === 'NORTHEAST'
+        ? loc.location_id.startsWith('NE-')
+        : loc.location_id.startsWith('WG-');
+
+    const matchesSearch =
+      searchQuery.trim() === ''
+        ? true
+        : loc.location_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          loc.location_id.toLowerCase().includes(searchQuery.toLowerCase());
+
+    return matchesRegion && matchesSearch;
   });
 
-  const getRiskBadgeClass = (level: string) => {
-    if (level === 'CRITICAL') return 'bg-bad-soft border-bad text-bad';
-    if (level === 'HIGH') return 'bg-accent-soft border-accent text-accent';
-    if (level === 'MODERATE') return 'bg-cool-soft border-cool text-cool';
-    return 'bg-ok-soft border-ok text-ok';
+  const getTrendIcon = (trend: string) => {
+    if (trend.includes('INCREASING')) {
+      return <TrendingUp size={13} className="text-bad" aria-hidden="true" />;
+    }
+    if (trend.includes('DECREASING')) {
+      return <TrendingDown size={13} className="text-ok" aria-hidden="true" />;
+    }
+    return <Minus size={13} className="text-muted" aria-hidden="true" />;
   };
 
-  return (
-    <div className="min-h-screen bg-paper text-ink font-sans p-4 md:p-6 overflow-x-hidden">
-      {/* Header */}
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-rule pb-4 mb-5 gap-4">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <Link
-              to="/"
-              className="text-muted hover:text-ink flex items-center gap-1.5 transition-colors text-xs font-medium focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              <ArrowLeft size={14} /> Back to portal
-            </Link>
-            <span className="text-rule-2">|</span>
-            <span className="inline-flex items-center gap-1.5 text-xs text-accent bg-paper-2 px-2.5 py-0.5 rounded border border-rule">
-              <Radio size={12} className="text-accent" />
-              <span>{lastSyncTime ? `Live telemetry: ${lastSyncTime}` : 'Telemetry streaming'}</span>
-            </span>
-          </div>
+  const criticalCount = riskData.filter((r) => r.risk_level === 'CRITICAL').length;
+  const highCount = riskData.filter((r) => r.risk_level === 'HIGH').length;
 
-          <h1 className="text-2xl md:text-3xl font-medium text-ink flex items-center gap-2">
-            <span>JALRAKSHAK emergency management center</span>
-            <span className="text-xs px-2 py-0.5 rounded bg-accent-soft text-accent border border-accent font-medium">
+  return (
+    <div className="min-h-screen bg-paper text-ink font-sans flex flex-col antialiased">
+      {/* 1. Thin & Quiet Top Bar */}
+      <header className="h-13 bg-paper-2 border-b border-rule px-4 flex items-center justify-between gap-4 sticky top-0 z-30 shrink-0">
+        <div className="flex items-center gap-3">
+          <Link
+            to="/"
+            className="text-muted hover:text-ink flex items-center gap-1.5 transition-colors text-xs font-medium focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <ArrowLeft size={14} aria-hidden="true" />
+            <span className="hidden sm:inline">Portal</span>
+          </Link>
+          <span className="text-rule-2">/</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold tracking-tight text-ink">JALRAKSHAK</span>
+            <span className="text-xs px-2 py-0.5 rounded bg-paper-3 text-muted border border-rule font-medium">
               Operations console
             </span>
-          </h1>
-          <p className="text-xs md:text-sm text-muted mt-0.5">
-            Hydrological decision-support, multi-agency feeds and OASIS CAP 1.2 emergency dispatch
-          </p>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2.5 w-full md:w-auto items-center">
-          <button
-            type="button"
-            onClick={runDemoStep}
-            className="flex-1 md:flex-none px-4 py-2 bg-accent text-accent-ink hover:opacity-90 rounded-lg text-xs font-medium flex items-center justify-center gap-2 transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
-          >
-            <PlayCircle size={15} />
-            <span>
-              {demoStep === 0
-                ? 'Start simulation scenario'
-                : demoStep >= 6
-                ? 'Reset scenario'
-                : `Next scenario step (${demoStep}/6)`}
-            </span>
-          </button>
+        {/* Global Telemetry & Status Readouts */}
+        <div className="flex items-center gap-2.5 sm:gap-4 text-xs">
+          <div className="hidden lg:flex items-center gap-2 text-muted">
+            <span className="w-2 h-2 rounded-full bg-ok shrink-0" aria-hidden="true"></span>
+            <span>{lastSyncTime ? `Sync: ${lastSyncTime}` : 'Telemetry streaming'}</span>
+          </div>
 
+          <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded bg-paper-3 border border-rule text-muted">
+            <Activity size={12} className="text-accent" aria-hidden="true" />
+            <span>Sensors:</span>
+            <span className="text-ink font-medium num">8/8 online</span>
+          </div>
+
+          {criticalCount + highCount > 0 && (
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-bad-soft border border-bad text-bad font-medium text-xs">
+              <ShieldAlert size={13} aria-hidden="true" />
+              <span className="num">{criticalCount + highCount}</span>
+              <span className="hidden md:inline">active warnings</span>
+            </div>
+          )}
+
+          <div className="h-4 w-px bg-rule hidden sm:block" />
+
+          {/* Action Buttons */}
           <button
             type="button"
             onClick={handleManualSync}
             disabled={isSyncing}
-            className="flex-1 md:flex-none px-4 py-2 bg-paper-2 hover:bg-paper-3 border border-rule text-ink rounded-lg text-xs font-medium flex items-center justify-center gap-2 transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+            className="p-1.5 rounded-md border border-rule bg-paper-2 hover:bg-paper-3 text-muted hover:text-ink transition-colors focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.98] disabled:opacity-50"
+            title="Refresh satellite & sensor telemetry"
+            aria-label="Refresh telemetry"
           >
-            <RefreshCw size={14} className={isSyncing ? 'motion-safe:animate-spin' : ''} />
-            <span>{isSyncing ? 'Syncing feeds…' : 'Sync feeds'}</span>
+            <RefreshCw size={14} className={isSyncing ? 'motion-safe:animate-spin' : ''} aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            onClick={runDemoStep}
+            className="px-2.5 py-1 rounded-md bg-paper-3 hover:bg-paper border border-rule text-ink text-xs font-medium flex items-center gap-1.5 transition-colors focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.98]"
+            title="Advance deterministic simulation scenario"
+          >
+            <PlayCircle size={13} className="text-accent" aria-hidden="true" />
+            <span className="hidden md:inline">
+              {demoStep === 0 ? 'Run scenario' : `Step ${demoStep}/6`}
+            </span>
           </button>
 
           <button
             type="button"
             onClick={() => setIsAuthModalOpen(true)}
-            className="flex-1 md:flex-none px-3.5 py-2 bg-paper-2 hover:bg-paper-3 rounded-lg border border-rule text-xs font-medium text-ink flex items-center gap-1.5 transition-colors focus-visible:outline-2 focus-visible:outline-accent"
+            className="px-2.5 py-1 rounded-md border border-rule bg-paper-2 hover:bg-paper-3 text-xs font-medium text-ink flex items-center gap-1.5 transition-colors focus-visible:outline-2 focus-visible:outline-accent"
           >
             {authToken ? (
               <>
-                <Unlock size={14} className="text-ok" />
-                <span>Officer {authUsername}</span>
+                <Unlock size={13} className="text-ok" aria-hidden="true" />
+                <span className="hidden md:inline">{authUsername}</span>
               </>
             ) : (
               <>
-                <Lock size={14} className="text-accent" />
-                <span>Operator login</span>
+                <Lock size={13} className="text-muted" aria-hidden="true" />
+                <span className="hidden md:inline">Officer login</span>
               </>
             )}
           </button>
 
-          <div className="flex-1 md:flex-none px-3.5 py-2 bg-paper-2 rounded-lg border border-rule text-center flex flex-col justify-center min-w-[95px]">
-            <span
-              className={`block text-xl font-medium num ${
-                criticalLocations.length > 0 ? 'text-bad' : 'text-muted'
-              }`}
-            >
-              {criticalLocations.length}
-            </span>
-            <span className="text-xs text-muted">Severe warnings</span>
-          </div>
-
-          <div className="flex-1 md:flex-none px-4 py-2 bg-paper-2 rounded-lg border border-rule text-center flex flex-col justify-center min-w-[120px]">
-            <span className="block text-sm font-medium text-cool num">1078 / 112</span>
-            <span className="text-xs text-muted">24x7 NDRF helpline</span>
-          </div>
+          <ThemeToggle />
         </div>
       </header>
 
-      {/* Safety Notice (Ground Rule 4) */}
-      <div className="mb-6 p-3.5 bg-paper-2 border border-rule rounded-xl text-xs text-muted flex items-start gap-2.5">
-        <Info size={16} className="text-accent shrink-0 mt-0.5" />
-        <div className="leading-relaxed">
-          <strong className="text-ink font-medium">Official safety notice:</strong> Decision-support only. Not a certified emergency warning system. Model predictions, hydrological indices, and satellite telemetry must be verified with qualified hydrological and disaster management authorities (CWC, IMD, NDMA) before executing operational orders.
-        </div>
-      </div>
+      {/* 2. Active Alerts Banner Strip */}
+      <AlertBanner alerts={alertItems} onSelectLocation={(id) => {
+        const found = riskData.find((l) => l.location_id === id);
+        if (found) setSelectedLocation(found);
+      }} />
 
+      {/* Dispatch feedback toast */}
       {dispatchStatus && (
-        <div className="mb-6 p-3 bg-paper-2 border border-accent rounded-xl text-xs text-accent flex items-center gap-2">
-          <ShieldAlert size={15} className="shrink-0" />
+        <div className="bg-paper-2 border-b border-accent px-4 py-2 text-xs text-accent flex items-center gap-2">
+          <ShieldAlert size={14} className="shrink-0" aria-hidden="true" />
           <span>{dispatchStatus}</span>
         </div>
       )}
 
-      {/* Satellite Constellation & Agency Feed HUD */}
-      <div className="mb-6">
-        <SatelliteFeed onSync={handleManualSync} isSyncing={isSyncing} />
+      {/* Mobile Tab Navigation */}
+      <div className="lg:hidden flex border-b border-rule bg-paper-2 px-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => setActiveTab('map')}
+          className={`flex-1 py-2 text-xs font-medium border-b-2 text-center transition-colors ${
+            activeTab === 'map' ? 'border-accent text-ink font-semibold' : 'border-transparent text-muted'
+          }`}
+        >
+          Tactical map
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('list')}
+          className={`flex-1 py-2 text-xs font-medium border-b-2 text-center transition-colors ${
+            activeTab === 'list' ? 'border-accent text-ink font-semibold' : 'border-transparent text-muted'
+          }`}
+        >
+          Catchments ({riskData.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('intel')}
+          className={`flex-1 py-2 text-xs font-medium border-b-2 text-center transition-colors ${
+            activeTab === 'intel' ? 'border-accent text-ink font-semibold' : 'border-transparent text-muted'
+          }`}
+        >
+          Basin details
+        </button>
       </div>
 
-      <div className="grid grid-cols-12 gap-6">
-        {/* Left Column: GIS Map & Simulation */}
-        <div className="col-span-12 lg:col-span-8 space-y-6">
-          {selectedLocation ? (
-            <div
-              id="digital-twin-section"
-              className="bg-paper-2 border border-accent rounded-2xl p-4 relative min-h-[550px]"
-            >
-              <button
-                type="button"
-                onClick={() => setSelectedLocation(null)}
-                className="absolute top-6 right-6 text-ink bg-paper-3 hover:bg-paper-2 py-1.5 px-3 rounded-lg z-[500] text-xs font-medium border border-rule flex items-center gap-1.5 transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent"
-              >
-                <X size={14} /> Close digital twin
-              </button>
-              <MapDigitalTwin
-                locationId={selectedLocation.location_id}
-                lat={selectedLocation.lat}
-                lng={selectedLocation.lng}
-                locationName={selectedLocation.location_name}
-                riskLevel={selectedLocation.risk_level}
+      {/* 3. Main 3-Column Operations Layout */}
+      <div className="flex-1 grid grid-cols-12 overflow-hidden">
+        {/* Left Column: Catchment List (≈320px on desktop) */}
+        <aside
+          className={`col-span-12 lg:col-span-3 xl:col-span-3 border-r border-rule bg-paper-2 flex flex-col ${
+            activeTab === 'list' ? 'block' : 'hidden lg:flex'
+          }`}
+        >
+          {/* Search Bar with "/" keyboard shortcut indicator */}
+          <div className="p-3 border-b border-rule bg-paper-2">
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-2.5 text-muted pointer-events-none" aria-hidden="true" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Search basin name or ID…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-8 py-1.5 text-xs bg-paper-3 border border-rule rounded-md text-ink placeholder:text-muted focus:outline-none focus:border-accent transition-colors"
+                aria-label="Search catchment basins"
               />
+              <kbd className="absolute right-2.5 top-2 text-[10px] text-muted bg-paper-2 px-1 rounded border border-rule pointer-events-none">
+                /
+              </kbd>
             </div>
-          ) : (
-            <div className="bg-paper-2 border border-rule rounded-2xl h-[480px] relative overflow-hidden flex items-center justify-center">
-              <MapWrapper locations={riskData} />
-              <div className="absolute top-4 left-4 z-[400] bg-paper-2 p-3 rounded-xl border border-rule hidden sm:block">
-                <h4 className="text-xs font-medium text-ink mb-2 flex items-center gap-1.5">
-                  <Layers size={13} className="text-accent" /> Multi-source GIS grid
-                </h4>
-                <div className="flex flex-col gap-1 text-xs text-ink-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-bad"></span> Critical (
-                    {riskData.filter((r) => r.risk_level === 'CRITICAL').length})
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-accent"></span> High (
-                    {riskData.filter((r) => r.risk_level === 'HIGH').length})
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-cool"></span> Moderate (
-                    {riskData.filter((r) => r.risk_level === 'MODERATE').length})
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-ok"></span> Low (
-                    {riskData.filter((r) => r.risk_level === 'LOW').length})
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <SimulationPanel />
-            <SensorPanel />
-          </div>
-        </div>
-
-        {/* Right Column: Intelligence Feed & Explainability */}
-        <div className="col-span-12 lg:col-span-4 space-y-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <Activity className="text-accent" size={18} />
-              <h2 className="text-sm font-medium text-ink">Hyper-local basin intelligence</h2>
-            </div>
-            <span className="text-xs text-muted flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-accent"></span> Active
-            </span>
           </div>
 
-          <div className="flex flex-wrap gap-1.5 pb-1">
-            {FILTERS.map((f) => (
+          {/* Region Filter Tabs */}
+          <div className="p-2 border-b border-rule flex flex-wrap gap-1 bg-paper-2">
+            {REGION_FILTERS.map((f) => (
               <button
                 key={f.id}
                 type="button"
-                onClick={() => setActiveFilter(f.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent ${
-                  activeFilter === f.id
-                    ? 'bg-accent text-accent-ink'
-                    : 'bg-paper-2 hover:bg-paper-3 text-muted border border-rule'
+                onClick={() => setActiveRegion(f.id)}
+                className={`px-2 py-1 rounded text-xs transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                  activeRegion === f.id
+                    ? 'bg-paper-3 font-semibold text-ink border border-rule-2'
+                    : 'text-muted hover:text-ink hover:bg-paper-3 border border-transparent'
                 }`}
               >
                 {f.label}
@@ -426,171 +459,247 @@ export default function AdminDashboard() {
             ))}
           </div>
 
-          <div className="space-y-3.5 max-h-[850px] overflow-y-auto pr-1">
-            {filteredLocations.map((loc) => (
-              <div
-                key={loc.location_id}
-                className={`p-4 rounded-xl border transition-colors ${
-                  loc.risk_level === 'CRITICAL'
-                    ? 'bg-bad-soft border-bad'
-                    : loc.risk_level === 'HIGH'
-                    ? 'bg-accent-soft border-accent'
-                    : 'bg-paper-2 border-rule'
-                }`}
-              >
-                {/* Basin Header */}
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <h4 className="font-medium text-ink text-base">{loc.location_name}</h4>
-                    <div className="text-xs text-muted flex items-center gap-2 mt-0.5">
-                      <span className="num">{loc.location_id}</span>
-                      <span>·</span>
-                      <span
-                        className={
-                          loc.is_simulated
-                            ? 'text-accent font-medium'
-                            : 'text-ok font-medium'
-                        }
-                      >
-                        {loc.is_simulated ? 'SIMULATED' : 'DERIVED MODEL'}
-                      </span>
-                      {loc.exposure && (
-                        <>
-                          <span>·</span>
-                          <span className="flex items-center gap-1 text-ink-2">
-                            <Users size={12} className="text-cool" />{' '}
-                            <span className="num">{loc.exposure.population_exposed}</span> exposed
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <span
-                    className={`px-2.5 py-0.5 text-xs font-medium rounded-lg border ${getRiskBadgeClass(
-                      loc.risk_level
-                    )}`}
+          {/* Catchment Basin List */}
+          <div className="flex-1 overflow-y-auto divide-y divide-rule">
+            {filteredLocations.length === 0 ? (
+              <div className="p-4">
+                <EmptyState
+                  title="No matching basins"
+                  description="Try adjusting your search terms or filter selection."
+                  action={{
+                    label: 'Clear search',
+                    onClick: () => {
+                      setSearchQuery('');
+                      setActiveRegion('ALL');
+                    },
+                  }}
+                />
+              </div>
+            ) : (
+              filteredLocations.map((loc) => {
+                const isSelected = selectedLocation?.location_id === loc.location_id;
+                return (
+                  <button
+                    key={loc.location_id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedLocation(loc);
+                      setActiveTab('intel');
+                    }}
+                    className={`w-full text-left p-3 transition-colors flex items-start justify-between gap-2.5 focus-visible:outline-2 focus-visible:outline-accent ${
+                      isSelected
+                        ? 'bg-paper-3 border-l-2 border-l-accent'
+                        : 'hover:bg-paper-3'
+                    }`}
                   >
-                    {loc.risk_level}
-                  </span>
-                </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-xs font-semibold text-ink truncate">
+                          {loc.location_name}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-muted">
+                        <span className="num">{loc.location_id}</span>
+                        <span>·</span>
+                        <div className="flex items-center gap-1">
+                          {getTrendIcon(loc.trajectory_trend)}
+                          <span className="truncate">{loc.lead_time_window}</span>
+                        </div>
+                      </div>
+                    </div>
 
-                {/* Trajectory & Alert Window */}
-                <div className="flex items-center justify-between text-xs font-medium mb-3 bg-paper-3 p-2 rounded-lg border border-rule">
-                  <div className="flex items-center gap-1.5">
-                    <TrendingUp size={13} className="text-accent" />
-                    <span className="text-muted">Trend:</span>
-                    <span className="text-ink">{loc.trajectory_trend}</span>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <RiskBadge level={loc.risk_level} size="sm" />
+                      <span className="text-xs text-muted num font-medium">
+                        {loc.flood_probability}%
+                      </span>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </aside>
+
+        {/* Center Column: Tactical Map & Supporting Telemetry */}
+        <main
+          className={`col-span-12 lg:col-span-5 xl:col-span-5 flex flex-col border-r border-rule bg-paper overflow-y-auto ${
+            activeTab === 'map' ? 'block' : 'hidden lg:flex'
+          }`}
+        >
+          {/* Tactical Map Container */}
+          <div className="h-[480px] w-full relative bg-paper-2 border-b border-rule">
+            {selectedLocation && selectedLocation.location_id.startsWith('DIGITAL-TWIN-') ? (
+              <MapDigitalTwin
+                locationId={selectedLocation.location_id}
+                lat={selectedLocation.lat}
+                lng={selectedLocation.lng}
+                locationName={selectedLocation.location_name}
+                riskLevel={selectedLocation.risk_level}
+              />
+            ) : (
+              <MapWrapper locations={riskData} />
+            )}
+
+            {/* Tactical basemap legend overlay */}
+            <div className="absolute top-3 left-3 z-[400] bg-paper-2/95 border border-rule p-2.5 rounded-md text-xs shadow-sm hidden sm:block">
+              <div className="flex items-center gap-1.5 text-muted mb-1.5 font-medium">
+                <Layers size={13} className="text-accent" aria-hidden="true" />
+                <span>Basin risk status</span>
+              </div>
+              <div className="flex flex-col gap-1 text-ink-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-bad"></span>
+                  <span>Critical ({criticalCount})</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-accent"></span>
+                  <span>High ({highCount})</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-cool"></span>
+                  <span>Moderate ({riskData.filter((r) => r.risk_level === 'MODERATE').length})</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-ok"></span>
+                  <span>Low ({riskData.filter((r) => r.risk_level === 'LOW').length})</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Satellite Constellation & Agency Feed HUD */}
+          <div className="p-4 border-b border-rule bg-paper">
+            <SatelliteFeed onSync={handleManualSync} isSyncing={isSyncing} />
+          </div>
+
+          {/* Sub-system Telemetry Grids */}
+          <div className="p-4 grid grid-cols-1 xl:grid-cols-2 gap-4 bg-paper">
+            <SimulationPanel />
+            <SensorPanel />
+          </div>
+        </main>
+
+        {/* Right Column: Detailed Basin Intelligence & Decision Actions (≈380px) */}
+        <aside
+          className={`col-span-12 lg:col-span-4 xl:col-span-4 bg-paper-2 flex flex-col overflow-y-auto ${
+            activeTab === 'intel' ? 'block' : 'hidden lg:flex'
+          }`}
+        >
+          {selectedLocation ? (
+            <div className="p-4 space-y-4">
+              {/* Basin Header */}
+              <div className="flex items-start justify-between gap-3 pb-3 border-b border-rule">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <h2 className="text-base font-semibold text-ink leading-tight">
+                      {selectedLocation.location_name}
+                    </h2>
                   </div>
-                  <div className="text-ink">
-                    <span className="text-muted">Lead time: </span>
-                    <span className="num font-medium text-accent">{loc.lead_time_window}</span>
+                  <div className="flex items-center gap-2 text-xs text-muted">
+                    <span className="num">{selectedLocation.location_id}</span>
+                    <span>·</span>
+                    <SourceTag
+                      isSimulated={selectedLocation.is_simulated}
+                      sourceName={selectedLocation.data_source}
+                    />
                   </div>
                 </div>
+                <RiskBadge level={selectedLocation.risk_level} size="md" />
+              </div>
 
-                {/* Satellite Signatures */}
-                {loc.satellite_info && (
-                  <div className="grid grid-cols-2 gap-2 p-2 bg-paper-3 rounded-lg border border-rule mb-3 text-xs">
+              {/* Key StatCards Grid */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <StatCard
+                  label="Flood probability"
+                  value={selectedLocation.flood_probability}
+                  unit="%"
+                  change={selectedLocation.trajectory_trend.includes('INCREASING') ? 4.2 : -1.5}
+                  changeLabel="surge"
+                  sparklineData={selectedLocation.trajectory.map((t) => t.risk_probability)}
+                  variant={selectedLocation.risk_level === 'CRITICAL' ? 'alert' : 'default'}
+                />
+                <StatCard
+                  label="Landslide index"
+                  value={selectedLocation.landslide_probability}
+                  unit="%"
+                  sparklineData={[30, 45, 52, 60, selectedLocation.landslide_probability]}
+                />
+                <StatCard
+                  label="Model confidence"
+                  value={selectedLocation.confidence}
+                  unit="%"
+                  updatedAgo="Calibrated"
+                />
+                <StatCard
+                  label="Compound hazard"
+                  value={selectedLocation.compound_hazard_level}
+                  updatedAgo="Combined"
+                />
+              </div>
+
+              {/* Satellite Signatures Grid */}
+              {selectedLocation.satellite_info && (
+                <div className="p-3 bg-paper-3 rounded-lg border border-rule space-y-2">
+                  <div className="flex items-center justify-between text-xs text-muted font-medium">
+                    <span>Multi-satellite sensor signatures</span>
+                    <span className="num">4 feeds</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="flex justify-between text-muted">
                       <span>INSAT-3DR CCT:</span>
                       <span className="text-ink font-medium num">
-                        {loc.satellite_info.isro_insat_cct}°C
+                        {selectedLocation.satellite_info.isro_insat_cct}°C
                       </span>
                     </div>
                     <div className="flex justify-between text-muted">
                       <span>NASA GPM flux:</span>
                       <span className="text-ink font-medium num">
-                        {loc.satellite_info.nasa_gpm_flux} mm/h
+                        {selectedLocation.satellite_info.nasa_gpm_flux} mm/h
                       </span>
                     </div>
                     <div className="flex justify-between text-muted">
                       <span>Sentinel-1 soil:</span>
                       <span className="text-ink font-medium num">
-                        {loc.satellite_info.sentinel_soil_idx} dB σ°
+                        {selectedLocation.satellite_info.sentinel_soil_idx} dB σ°
                       </span>
                     </div>
                     <div className="flex justify-between text-muted">
                       <span>IMD radar:</span>
                       <span className="text-ink font-medium num">
-                        {loc.satellite_info.imd_radar_dbz} dBZ
+                        {selectedLocation.satellite_info.imd_radar_dbz} dBZ
                       </span>
                     </div>
                   </div>
-                )}
-
-                {/* Model Confidence & Compound Hazard */}
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div>
-                    <div className="flex justify-between text-xs font-medium text-muted mb-1">
-                      <span>Model confidence</span>
-                      <span className="text-ink font-medium num">{loc.confidence}%</span>
-                    </div>
-                    <div className="w-full bg-paper-3 rounded-full h-1.5 overflow-hidden border border-rule">
-                      <div
-                        className="h-full bg-accent transition-colors"
-                        style={{ width: `${loc.confidence}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-xs font-medium text-muted mb-1">
-                      <span>Compound hazard</span>
-                      <span className="text-ink font-medium">{loc.compound_hazard_level}</span>
-                    </div>
-                    <div className="w-full bg-paper-3 rounded-full h-1.5 overflow-hidden border border-rule">
-                      <div
-                        className={`h-full transition-colors ${
-                          loc.compound_hazard_level === 'CRITICAL' ? 'bg-bad' : 'bg-cool'
-                        }`}
-                        style={{
-                          width: `${
-                            loc.compound_hazard_level === 'CRITICAL'
-                              ? 100
-                              : loc.compound_hazard_level === 'HIGH'
-                              ? 70
-                              : 35
-                          }%`,
-                        }}
-                      ></div>
-                    </div>
-                  </div>
                 </div>
+              )}
 
-                {/* Ensemble Model Calibration */}
-                {loc.ensemble_data && (
-                  <div className="mb-3 text-xs bg-paper-3 p-2 rounded-lg border border-rule">
-                    <div className="text-muted font-medium mb-1 flex items-center gap-1.5">
-                      <Cpu size={12} className="text-cool" />
-                      <span>Calibrated ensemble agreement:</span>
-                      <span className="text-ink">{loc.ensemble_data.model_agreement}</span>
-                    </div>
-                    <div className="flex justify-between text-muted num text-xs">
-                      <span>XGB: {loc.ensemble_data.xgboost}%</span>
-                      <span>RF: {loc.ensemble_data.random_forest}%</span>
-                      <span>LogReg: {loc.ensemble_data.logistic_regression}%</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* 6-Hour Risk Trajectory Chart */}
-                <div className="h-16 mb-3">
-                  <span className="text-xs text-muted font-medium block mb-1">
-                    6-hour risk trajectory
+              {/* 24-Hour Risk Trajectory Chart */}
+              <div className="p-3.5 bg-paper rounded-lg border border-rule">
+                <div className="flex items-center justify-between mb-2 text-xs">
+                  <span className="font-medium text-ink">Risk trajectory forecast</span>
+                  <span className="text-muted text-xs">
+                    Trend: <span className="text-ink">{selectedLocation.trajectory_trend}</span>
                   </span>
+                </div>
+                <div className="h-28 w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={loc.trajectory}>
+                    <LineChart data={selectedLocation.trajectory} margin={{ top: 5, right: 5, bottom: 0, left: -25 }}>
                       <CartesianGrid strokeDasharray="2 2" stroke="var(--color-rule)" vertical={false} />
-                      <XAxis dataKey="timestamp" hide />
-                      <YAxis domain={[0, 100]} hide />
+                      <XAxis dataKey="timestamp" tick={{ fontSize: 10, fill: 'var(--color-muted)' }} />
+                      <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: 'var(--color-muted)' }} />
                       <Tooltip content={<CustomTrajectoryTooltip />} />
+                      <ReferenceLine y={75} stroke="var(--color-bad)" strokeDasharray="3 3" />
+                      <ReferenceLine y={50} stroke="var(--color-accent)" strokeDasharray="3 3" />
                       <Line
                         type="monotone"
                         dataKey="risk_probability"
                         stroke={
-                          loc.risk_level === 'CRITICAL'
+                          selectedLocation.risk_level === 'CRITICAL'
                             ? 'var(--color-bad)'
-                            : loc.risk_level === 'HIGH'
+                            : selectedLocation.risk_level === 'HIGH'
                             ? 'var(--color-accent)'
-                            : 'var(--color-cool)'
+                            : 'var(--color-ok)'
                         }
                         strokeWidth={2}
                         dot={false}
@@ -599,155 +708,165 @@ export default function AdminDashboard() {
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
+              </div>
 
-                {/* Explainability (SHAP Factors) */}
-                {(Object.keys(loc.contributing_factors).length > 0 ||
-                  Object.keys(loc.negative_factors || {}).length > 0) && (
-                  <div className="bg-paper-3 rounded-lg p-2.5 mb-3 border border-rule">
-                    <span className="text-xs text-muted font-medium block mb-1.5">
-                      Hydrological explainability (feature attribution)
-                    </span>
-                    <div className="space-y-1.5">
-                      {Object.entries(loc.contributing_factors).map(([factor, weight]) => (
-                        <div key={factor}>
-                          <div className="flex justify-between text-xs text-ink-2 mb-0.5">
-                            <span>{factor}</span>
-                            <span className="text-bad num font-medium">
-                              +{Math.round(weight * 100)}%
-                            </span>
-                          </div>
-                          <div className="w-full bg-paper rounded-full h-1 overflow-hidden">
-                            <div
-                              className="bg-bad h-full"
-                              style={{ width: `${Math.min(100, weight * 100 * 2)}%` }}
-                            ></div>
-                          </div>
+              {/* Hydrological Feature Attribution (SHAP Factors) */}
+              {(Object.keys(selectedLocation.contributing_factors).length > 0 ||
+                Object.keys(selectedLocation.negative_factors || {}).length > 0) && (
+                <div className="p-3 bg-paper rounded-lg border border-rule space-y-2">
+                  <span className="text-xs font-medium text-ink block">
+                    Feature attribution (hydrological risk drivers)
+                  </span>
+                  <div className="space-y-1.5">
+                    {Object.entries(selectedLocation.contributing_factors).map(([factor, weight]) => (
+                      <div key={factor}>
+                        <div className="flex justify-between text-xs text-ink-2 mb-0.5">
+                          <span>{factor}</span>
+                          <span className="text-bad num font-medium">
+                            +{Math.round(weight * 100)}%
+                          </span>
                         </div>
-                      ))}
-                      {Object.entries(loc.negative_factors || {}).map(([factor, weight]) => (
-                        <div key={factor}>
-                          <div className="flex justify-between text-xs text-muted mb-0.5">
-                            <span>{factor} (buffer factor)</span>
-                            <span className="text-ok num font-medium">
-                              -{Math.round(weight * 100)}%
-                            </span>
-                          </div>
-                          <div className="w-full bg-paper rounded-full h-1 overflow-hidden">
-                            <div
-                              className="bg-ok h-full"
-                              style={{ width: `${Math.min(100, weight * 100 * 2)}%` }}
-                            ></div>
-                          </div>
+                        <div className="w-full bg-paper-3 rounded-full h-1 overflow-hidden">
+                          <div
+                            className="bg-bad h-full"
+                            style={{ width: `${Math.min(100, weight * 100 * 2)}%` }}
+                          ></div>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Action & Shelter Directive */}
-                <div className="flex flex-col gap-2">
-                  <div
-                    className={`p-2.5 rounded-lg border text-xs flex gap-2 items-start ${
-                      loc.risk_level === 'CRITICAL' || loc.risk_level === 'HIGH'
-                        ? 'bg-bad-soft border-bad text-ink'
-                        : 'bg-paper-3 border-rule text-ink-2'
-                    }`}
-                  >
-                    {loc.risk_level === 'CRITICAL' || loc.risk_level === 'HIGH' ? (
-                      <AlertTriangle size={15} className="text-bad shrink-0 mt-0.5" />
-                    ) : (
-                      <ShieldCheck size={15} className="text-ok shrink-0 mt-0.5" />
-                    )}
-                    <div>
-                      <div className="text-xs font-medium text-muted mb-0.5">
-                        Operational directive
                       </div>
-                      <div className="leading-snug mb-1">{loc.recommended_action}</div>
-                      <div className="text-xs text-ok font-medium">
-                        Safe zone shelter: {loc.safe_zone}
+                    ))}
+                    {Object.entries(selectedLocation.negative_factors || {}).map(([factor, weight]) => (
+                      <div key={factor}>
+                        <div className="flex justify-between text-xs text-muted mb-0.5">
+                          <span>{factor} (buffer factor)</span>
+                          <span className="text-ok num font-medium">
+                            -{Math.round(weight * 100)}%
+                          </span>
+                        </div>
+                        <div className="w-full bg-paper-3 rounded-full h-1 overflow-hidden">
+                          <div
+                            className="bg-ok h-full"
+                            style={{ width: `${Math.min(100, weight * 100 * 2)}%` }}
+                          ></div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenDigitalTwin(loc)}
-                      className={`font-medium py-2 px-3 rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5 focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.98] ${
-                        selectedLocation?.location_id === loc.location_id
-                          ? 'bg-accent text-accent-ink'
-                          : 'bg-paper-3 hover:bg-paper text-ink border border-rule'
-                      }`}
-                    >
-                      <Navigation size={13} />
-                      <span>Digital twin</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleDispatchAlert(loc.location_id)}
-                      className="font-medium py-2 px-3 rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5 bg-paper-3 hover:bg-paper text-ink border border-rule focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.98]"
-                    >
-                      <ShieldAlert size={13} className="text-accent" />
-                      <span>Dispatch alert</span>
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <a
-                      href={`${API_BASE_URL}/api/cap-alert/${loc.location_id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center justify-center gap-1 py-1.5 px-2 bg-paper-3 hover:bg-paper text-muted hover:text-ink rounded border border-rule transition-colors focus-visible:outline-2 focus-visible:outline-accent"
-                    >
-                      <FileCode2 size={12} className="text-accent" />
-                      <span>CAP 1.2 XML</span>
-                    </a>
-
-                    <a
-                      href={`${API_BASE_URL}/api/bulletin/${loc.location_id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center justify-center gap-1 py-1.5 px-2 bg-paper-3 hover:bg-paper text-muted hover:text-ink rounded border border-rule transition-colors focus-visible:outline-2 focus-visible:outline-accent"
-                    >
-                      <FileText size={12} className="text-cool" />
-                      <span>PDF bulletin</span>
-                    </a>
+                    ))}
                   </div>
                 </div>
+              )}
+
+              {/* Action Directive & Safe Zone Shelter */}
+              <div
+                className={`p-3 rounded-lg border text-xs space-y-1.5 ${
+                  selectedLocation.risk_level === 'CRITICAL' || selectedLocation.risk_level === 'HIGH'
+                    ? 'bg-bad-soft border-bad text-ink'
+                    : 'bg-paper-3 border-rule text-ink'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 font-medium">
+                  {selectedLocation.risk_level === 'CRITICAL' || selectedLocation.risk_level === 'HIGH' ? (
+                    <ShieldAlert size={15} className="text-bad shrink-0" aria-hidden="true" />
+                  ) : (
+                    <ShieldCheck size={15} className="text-ok shrink-0" aria-hidden="true" />
+                  )}
+                  <span>Operational directive:</span>
+                </div>
+                <p className="leading-snug">{selectedLocation.recommended_action}</p>
+                <div className="pt-1.5 border-t border-rule text-xs flex items-center justify-between">
+                  <span className="text-muted">Safe zone evacuation destination:</span>
+                  <span className="font-medium text-ok">{selectedLocation.safe_zone}</span>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
+
+              {/* Official Action Controls */}
+              <div className="space-y-2 pt-2 border-t border-rule">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleDispatchAlert(selectedLocation.location_id)}
+                    className="py-2 px-3 rounded-md bg-paper-3 hover:bg-paper border border-rule text-ink text-xs font-medium flex items-center justify-center gap-1.5 transition-colors focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.98]"
+                  >
+                    <ShieldAlert size={13} className="text-accent" aria-hidden="true" />
+                    <span>Dispatch alert</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const dtId = `DIGITAL-TWIN-${selectedLocation.location_id}`;
+                      setSelectedLocation({ ...selectedLocation, location_id: dtId });
+                    }}
+                    className="py-2 px-3 rounded-md bg-paper-3 hover:bg-paper border border-rule text-ink text-xs font-medium flex items-center justify-center gap-1.5 transition-colors focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.98]"
+                  >
+                    <Navigation size={13} className="text-cool" aria-hidden="true" />
+                    <span>Digital twin view</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <a
+                    href={`${API_BASE_URL}/api/cap-alert/${selectedLocation.location_id.replace('DIGITAL-TWIN-', '')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-center gap-1 py-1.5 px-2 bg-paper-3 hover:bg-paper text-muted hover:text-ink rounded border border-rule transition-colors focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    <FileCode2 size={12} className="text-accent" aria-hidden="true" />
+                    <span>OASIS CAP 1.2 XML</span>
+                  </a>
+
+                  <a
+                    href={`${API_BASE_URL}/api/bulletin/${selectedLocation.location_id.replace('DIGITAL-TWIN-', '')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-center gap-1 py-1.5 px-2 bg-paper-3 hover:bg-paper text-muted hover:text-ink rounded border border-rule transition-colors focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    <FileText size={12} className="text-cool" aria-hidden="true" />
+                    <span>Plain bulletin</span>
+                  </a>
+                </div>
+              </div>
+
+              {/* Persistent Disclaimer Bar */}
+              <DisclaimerBar />
+            </div>
+          ) : (
+            <div className="p-8">
+              <EmptyState
+                title="No basin selected"
+                description="Select a catchment basin from the left panel or tactical map to inspect real-time hydrological risk."
+              />
+            </div>
+          )}
+        </aside>
       </div>
 
       {/* Operator Login Modal */}
       {isAuthModalOpen && (
-        <div className="fixed inset-0 z-[600] bg-black/60 flex items-center justify-center p-4">
-          <div className="bg-paper-2 border border-rule rounded-xl max-w-sm w-full p-5 relative">
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-paper-2 border border-rule rounded-lg max-w-sm w-full p-5 relative shadow-lg">
             <button
               type="button"
               onClick={() => setIsAuthModalOpen(false)}
               className="absolute top-4 right-4 text-muted hover:text-ink transition-colors focus-visible:outline-2 focus-visible:outline-accent"
+              aria-label="Close authentication modal"
             >
-              <X size={16} />
+              <X size={16} aria-hidden="true" />
             </button>
 
-            <h3 className="text-base font-medium text-ink mb-1 flex items-center gap-2">
-              <Lock size={16} className="text-accent" /> Operator authentication
+            <h3 className="text-sm font-semibold text-ink mb-1 flex items-center gap-2">
+              <Lock size={15} className="text-accent" aria-hidden="true" /> Operator authentication
             </h3>
             <p className="text-xs text-muted mb-4">
-              Enter authorized personnel credentials to dispatch emergency notifications.
+              Enter authorized personnel credentials to authorize emergency alert dispatching.
             </p>
 
             <form onSubmit={handleOperatorLogin} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-muted mb-1">Officer ID</label>
+                <label className="block text-xs font-medium text-muted mb-1">Duty officer ID</label>
                 <input
                   type="text"
                   value={loginUser}
                   onChange={(e) => setLoginUser(e.target.value)}
-                  className="w-full p-2 bg-paper-3 border border-rule rounded-lg text-sm text-ink focus:outline-none focus:border-accent transition-colors"
+                  className="w-full p-2 bg-paper-3 border border-rule rounded text-xs text-ink focus:outline-none focus:border-accent transition-colors"
                   required
                 />
               </div>
@@ -758,7 +877,7 @@ export default function AdminDashboard() {
                   type="password"
                   value={loginPass}
                   onChange={(e) => setLoginPass(e.target.value)}
-                  className="w-full p-2 bg-paper-3 border border-rule rounded-lg text-sm text-ink focus:outline-none focus:border-accent transition-colors"
+                  className="w-full p-2 bg-paper-3 border border-rule rounded text-xs text-ink focus:outline-none focus:border-accent transition-colors"
                   required
                 />
               </div>
@@ -767,7 +886,7 @@ export default function AdminDashboard() {
 
               <button
                 type="submit"
-                className="w-full py-2 bg-accent text-accent-ink hover:opacity-90 rounded-lg text-xs font-medium transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent"
+                className="w-full py-2 bg-paper-3 hover:bg-paper border border-rule text-ink rounded text-xs font-medium transition-colors active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-accent"
               >
                 Authenticate session
               </button>
