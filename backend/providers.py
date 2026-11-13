@@ -1,8 +1,8 @@
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential
 from schemas import (
     LiveWeatherResponse, LiveEarthquakeResponse, LiveEarthquakeItem,
     CISAKEVResponse, CISAVulnerabilityItem, GloFASDischargeResponse

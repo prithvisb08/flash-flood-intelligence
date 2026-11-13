@@ -1,6 +1,6 @@
 import heapq
 import math
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Optional, Any
 
 # Synthetic Graph Networks for specific locations (Nodes: (Lat, Lng), Edges connecting them)
 # Node names: "Start", "SafeZone", or intersection names
@@ -112,10 +112,10 @@ def generate_procedural_graph(location_id: str, lat: float, lng: float, safe_zon
     # Procedural topography nodes navigating up from epicenter towards higher ground
     nodes = {
         f"N1_{location_id}_Epicenter": (lat, lng),
-        f"N2_Valley_Road": (lat + 0.003, lng + 0.002),
-        f"N3_Cross_Junction": (lat + 0.007, lng + 0.005),
-        f"N4_Ridge_Bypass": (lat + 0.004, lng + 0.008),
-        f"N5_High_Terrace": (lat + 0.010, lng + 0.011),
+        "N2_Valley_Road": (lat + 0.003, lng + 0.002),
+        "N3_Cross_Junction": (lat + 0.007, lng + 0.005),
+        "N4_Ridge_Bypass": (lat + 0.004, lng + 0.008),
+        "N5_High_Terrace": (lat + 0.010, lng + 0.011),
         f"N6_SafeZone_{safe_label[:15].strip()}": (lat + 0.014, lng + 0.015)
     }
     edges = {

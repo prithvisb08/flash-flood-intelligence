@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query, Header, Request, status
@@ -306,7 +306,7 @@ async def get_cap_alert(
     x_session_id: Optional[str] = Header(None)
 ):
     """Outputs standardized OASIS CAP 1.2 XML for NDMA Sachet integration."""
-    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
+    loc_obj = next((loc for loc in LOCATIONS if loc["id"] == location_id), None)
     if not loc_obj:
         raise HTTPException(status_code=404, detail="Location not found")
 
@@ -328,7 +328,7 @@ async def generate_official_bulletin(
     x_session_id: Optional[str] = Header(None)
 ):
     """Generates official plain-text NDMA-compliant dispatch bulletin."""
-    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
+    loc_obj = next((loc for loc in LOCATIONS if loc["id"] == location_id), None)
     if not loc_obj:
         raise HTTPException(status_code=404, detail="Location not found")
 
@@ -396,7 +396,7 @@ def dispatch_alert(
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """Human-confirmed dispatch via Apprise. Requires JWT authentication."""
-    loc_obj = next((l for l in LOCATIONS if l["id"] == req.location_id), None)
+    loc_obj = next((loc for loc in LOCATIONS if loc["id"] == req.location_id), None)
     if not loc_obj:
         raise HTTPException(status_code=404, detail="Location not found")
 
@@ -710,7 +710,7 @@ async def get_spatial_hazard_map(
 
 @app.get("/api/historical_compare/{location_id}")
 def get_historical_comparison(location_id: str):
-    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
+    loc_obj = next((loc for loc in LOCATIONS if loc["id"] == location_id), None)
     if not loc_obj:
         raise HTTPException(status_code=404, detail="Location not found")
     return fetch_historical_compare(loc_obj["lat"], loc_obj["lng"])
@@ -718,7 +718,7 @@ def get_historical_comparison(location_id: str):
 
 @app.get("/api/subcity_zones/{location_id}")
 def get_subcity_zones(location_id: str):
-    loc_obj = next((l for l in LOCATIONS if l["id"] == location_id), None)
+    loc_obj = next((loc for loc in LOCATIONS if loc["id"] == location_id), None)
     if not loc_obj:
         raise HTTPException(status_code=404, detail="Location not found")
     base_lat = loc_obj["lat"]
@@ -815,7 +815,7 @@ def system_health():
     return {
         "status": "operational",
         "total_locations": len(LOCATIONS),
-        "total_states": len(set(l["state"] for l in LOCATIONS)),
+        "total_states": len(set(loc["state"] for loc in LOCATIONS)),
         "sensors_online": online_sensors,
         "sensors_total": len(sensors),
         "total_syncs": state_manager.total_syncs,

@@ -1,8 +1,6 @@
 import math
-from typing import Dict, Any, Tuple
-from functools import lru_cache
+from typing import Dict, Any
 from weather import fetch_elevation
-from config import LOCATIONS
 
 # Precomputed real topographic & catchment attributes for registered basins
 # Based on SRTM 30m DEM analysis and CWC / River Basin Atlas of India
@@ -59,7 +57,6 @@ def calculate_dem_slope(lat: float, lon: float, delta_deg: float = 0.002) -> flo
     dy_meters = delta_deg * 111000.0
     dx_meters = delta_deg * 111000.0 * math.cos(math.radians(lat))
 
-    z_center = fetch_elevation(lat, lon)
     z_north = fetch_elevation(lat + delta_deg, lon)
     z_south = fetch_elevation(lat - delta_deg, lon)
     z_east = fetch_elevation(lat, lon + delta_deg)

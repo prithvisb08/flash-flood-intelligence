@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple, Optional
 import math
 from schemas import (
@@ -12,9 +12,9 @@ def compute_upstream_impact(loc_id: str, all_locations: List[Dict[str, Any]], te
     Pure, deterministic function without mutation.
     """
     impact = 0.0
-    for l in all_locations:
-        if loc_id in l.get("upstream_of", []):
-            up_data = telemetry_by_loc.get(l["id"], {})
+    for loc in all_locations:
+        if loc_id in loc.get("upstream_of", []):
+            up_data = telemetry_by_loc.get(loc["id"], {})
             rise = float(up_data.get("water_level_rise_rate", 0.0))
             rain = float(up_data.get("rainfall_1h", 0.0))
             if rise > 0.3:

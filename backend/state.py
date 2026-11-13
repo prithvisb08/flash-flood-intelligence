@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 import copy
 from config import LOCATIONS
-from settings import settings
 
 
 class SessionState:

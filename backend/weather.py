@@ -1,8 +1,7 @@
-import os
 from datetime import datetime, timedelta
 import requests
 from functools import lru_cache
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from settings import settings
 
 BASE_URL = settings.open_meteo_weather_url
@@ -47,7 +46,7 @@ def fetch_weather(lat: float, lon: float) -> Dict[str, Any]:
             'is_simulated': False,
             'fetched_at': datetime.now().isoformat()
         }
-    except Exception as e:
+    except Exception:
         # Honest fallback with explicit simulation/derived label
         return {
             'temperature': 20.0,

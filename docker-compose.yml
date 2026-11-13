@@ -1,0 +1,93 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: jalrakshak-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://jalrakshak:jalrakshak_secure_pass@db:5432/jalrakshak
+      - JWT_SECRET_KEY=dev_jwt_secret_key_change_in_production_12345
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - jalrakshak-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: jalrakshak-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - jalrakshak-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: jalrakshak-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jalrakshak-net
+
+  db:
+    image: postgres:16-alpine
+    container_name: jalrakshak-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=jalrakshak
+      - POSTGRES_PASSWORD=jalrakshak_secure_pass
+      - POSTGRES_DB=jalrakshak
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jalrakshak -d jalrakshak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jalrakshak-net
+
+networks:
+  jalrakshak-net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  pg_data:

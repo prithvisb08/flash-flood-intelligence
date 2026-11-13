@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Any
+from pydantic import BaseModel
+from typing import List, Dict, Optional
 
 SAFETY_DISCLAIMER: str = (
     "DECISION SUPPORT ONLY — NOT AN OFFICIAL EMERGENCY WARNING. "
