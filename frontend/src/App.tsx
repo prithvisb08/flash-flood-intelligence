@@ -4,8 +4,10 @@ import AdminDashboard from './pages/Admin';
 import Citizen from './pages/Citizen';
 
 function App() {
+  const basename = import.meta.env.BASE_URL || '/';
+
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/admin" element={<AdminDashboard />} />

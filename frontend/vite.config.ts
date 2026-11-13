@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
-  base: '/flash-flood-intelligence/',
+  base: process.env.VITE_BASE_PATH || '/',
   server: {
     host: '0.0.0.0',
     port: 5173,
